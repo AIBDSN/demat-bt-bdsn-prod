@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DEMAT-BT v11.0 — Référent & Brief</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./css/components.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand__title">DEMAT-BT</div>
+      <div class="brand__sub">Dématérialisation BT — Référent d'équipe</div>
+    </div>
+
+    <div class="topbar__center">
+      <div class="topbar__datetime" id="topDatetime">—</div>
+      <div class="topbar__weather" id="topWeather">Météo communes</div>
+    </div>
+
+    <div class="topbar__actions">
+      <div class="seg">
+        <button class="seg__btn seg__btn--active" onclick="switchView('referent')" data-view="referent">Référent</button>
+        <button class="seg__btn" onclick="switchView('brief')" data-view="brief">Brief (Flip)</button>
+      </div>
+
+      <button id="btnFullscreen" class="btn btn--secondary" title="Plein écran">
+        <span>⛶</span> Plein écran
+      </button>
+      <!-- Auth Supabase -->
+<div class="auth" style="display:flex; gap:8px; align-items:center; margin-left:12px;">
+  <button id="btnAuth" class="btn btn--secondary" type="button">Se connecter</button>
+  <span id="authStatus" class="hint" style="margin:0;">Non connecté</span>
+</div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar card">
+      <div class="sidebar-import-block">
+        <label class="btn btn--secondary" style="width:100%; justify-content:center;">
+          <span>📁</span> Importer PDF du jour
+          <input id="pdfFile" type="file" accept="application/pdf" hidden />
+        </label>
+        <button id="btnExtract" class="btn" style="width:100%; justify-content:center;">
+          <span>⚡</span> Extraire
+        </button>
+      </div>
+      <div class="divider" style="margin: 8px 0;"></div>
+      <div class="card__title">Contrôle</div>
+
+      <div class="field">
+        <button class="btn" style="width:100%; justify-content:center; background:white; color:var(--primary); border: 2px solid var(--primary); font-weight:800;" onclick="switchView('support')">
+           📊 Support Journée
+        </button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="control-badges">
+        <div class="control-badge" id="zonesBadge">
+          <div class="control-badge__icon">📍</div>
+          <div class="control-badge__label">Zones</div>
+          <div class="control-badge__status" id="zonesStatus">Chargement…</div>
+        </div>
+        
+        <div class="control-badge" id="pdfBadge">
+          <div class="control-badge__icon">📄</div>
+          <div class="control-badge__label">PDF</div>
+          <div class="control-badge__status" id="pdfStatus">Aucun PDF</div>
+        </div>
+      </div>
+
+      <div class="progress-badge" id="progressBadge">
+        <div class="progress-badge__header">
+          <div class="progress-badge__icon">⚡</div>
+          <div class="progress-badge__text" id="progMsg">Prêt.</div>
+        </div>
+        <div class="progress"><div id="progBar"></div></div>
+      </div>
+
+      <div class="field" style="margin-top: 12px;">
+        <button id="btnClearCache" class="btn btn--secondary" style="width: 100%; font-size: 12px;">
+          <span>🗑️</span> Vider le cache
+        </button>
+        <div class="hint" style="margin-top: 6px; font-size: 11px;">
+          Supprime les données sauvegardées localement
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="field">
+        <div class="label">Filtre</div>
+        <input id="searchInput" class="input" placeholder="Rechercher (BT, client, adresse, objet…)" />
+      </div>
+
+      <div class="field">
+        <div class="label">Type de docs</div>
+        <div class="chips" id="typeChips">
+          </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="field">
+        <div class="label">Technicien</div>
+        <select id="techSelect" class="select">
+          <option value="">— Tous —</option>
+        </select>
+        <div class="hint">Pour le Brief, sélectionne un technicien → ses BT s'affichent.</div>
+      </div>
+
+      <div class="divider"></div>
+    </aside>
+
+    <section class="content">
+      
+      <section id="viewReferent" class="view view--active">
+        <div class="row row--space">
+          <div>
+            <h2 class="h2">Référent d'équipe</h2>
+            <div class="sub">Tous les BT détectés + documents associés (AT, procédure, plan, photo, doc…)</div>
+          </div>
+
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+            <div class="kpis" id="kpis"></div>
+            
+            <div class="seg">
+              <button class="seg__btn seg__btn--active" data-layout="grid">
+                <span>◼</span> Vignettes
+              </button>
+              <button class="seg__btn" data-layout="timeline">
+                <span>◐</span> Catégories
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="btGrid" class="grid"></div>
+        <div id="btTimeline" class="timeline" style="display:none;">
+          </div>
+      </section>
+
+      <section id="viewBrief" class="view">
+        <div class="briefHeader">
+          <div>
+            <h2 class="h2">Brief équipe</h2>
+            <div class="sub">Sélectionne un technicien → ses BT + docs s'affichent instantanément.</div>
+          </div>
+          <div class="briefMeta" id="briefMeta"></div>
+          <div class="briefActions">
+            <button id="btnExportDay" class="btn" title="Générer un PDF unique pour la journée du technicien">
+              <span>📦</span> Générer la journée (PDF)
+            </button>
+          </div>
+        </div>
+
+        <div id="briefList" class="briefList"></div>
+      </section>
+
+      <section id="viewSupport" class="view" style="display:none;">
+        
+        <div class="row row--space screen-only" style="margin-bottom: 15px;">
+            <div>
+                <h2 class="h2">Pilotage Quotidien</h2>
+                <div class="sub">Gestion des activités, brief et débrief d'équipe.</div>
+            </div>
+        </div>
+
+        <nav class="support-tabs screen-only">
+            <button class="support-tab active" onclick="SupportModule.switchTab('tabBrief')">📝 Brief / Débrief</button>
+            <button class="support-tab" onclick="SupportModule.switchTab('tabParam')">🎨 Param Activités</button>
+            <button class="support-tab" onclick="SupportModule.switchTab('tabHistory')">📊 Données & Historique</button>
+        </nav>
+
+        <div id="tabBrief" class="support-panel active">
+            
+            <div class="print-header">
+    <div class="print-title-box">
+        BRIEF / DÉBRIEF — SUPPORT JOURNÉE
+    </div>
+    <div class="print-date-section">
+        <div class="print-date-row">
+            <span class="print-label">Date :</span>
+            <span id="printDateBox" class="print-value">--</span>
+        </div>
+        <div class="print-date-row">
+            <span class="print-label">Semaine :</span>
+            <span id="printWeekBox" class="print-value">--</span>
+        </div>
+    </div>
+</div>
+
+            <div class="day-nav screen-only">
+                <div style="display:flex; gap:10px;">
+                    <button class="btn btn--secondary" onclick="SupportModule.changeDay(-1)">◀ J-1</button>
+                    <button class="btn btn--secondary" onclick="SupportModule.goToday()">Auj.</button>
+                    <button class="btn btn--secondary" onclick="SupportModule.changeDay(1)">J+1 ▶</button>
+                    <input type="date" id="supportDatePicker" class="input" style="width:auto;" onchange="SupportModule.goToDate(this.value)">
+                </div>
+                
+                <div class="day-title-group">
+                    <div class="day-title-main" id="dayDisplayTitle">CHARGEMENT...</div>
+                    <div class="day-title-sub" id="dayDisplaySub">Semaine ...</div>
+                </div>
+
+                <div class="kpi-group">
+                    <div class="kpi-badge"><div class="kpi-dot" style="background:#22c55e"></div> Présents: <span id="kpiPres">0</span></div>
+                    <div class="kpi-badge"><div class="kpi-dot" style="background:#ef4444"></div> Absents: <span id="kpiAbs">0</span></div>
+                    <div class="kpi-badge"><div class="kpi-dot" style="background:#f59e0b"></div> Grève: <span id="kpiGreve">0</span></div>
+                </div>
+            </div>
+
+            <div class="support-toolbar screen-only">
+                <button class="btn" onclick="SupportModule.saveDay()">💾 Enregistrer</button>
+                <button class="btn btn--secondary" onclick="SupportModule.printDay()">🖨️ Imprimer</button>
+                <button class="btn btn--secondary" onclick="SupportModule.exportCSV()">📤 CSV</button>
+                <div style="flex:1"></div>
+                <button class="btn" style="background:#fee2e2; color:#991b1b; border:none;" onclick="SupportModule.clearDay()">🗑️ Vider</button>
+            </div>
+
+            <div class="brief-table-container">
+                <table class="brief-table">
+                    <thead>
+    <tr>
+        <th>#</th>
+        <th>Agent</th>
+        <th>PTC-PTD</th>
+        <th>Activité</th>
+        <th>Observations</th>
+        <th>Brief</th>
+        <th>Brief</th>
+        <th>Débrief</th>
+        <th>Débrief</th>
+        <th>Grv</th>
+    </tr>
+    <tr>
+        <th></th>
+        <th></th>
+        <th></th>
+        <th></th>
+        <th></th>
+        <th>Agence</th>
+        <th>Distance</th>
+        <th>Agence</th>
+        <th>Distance</th>
+        <th></th>
+    </tr>
+</thead>
+                    <tbody id="briefTableBody">
+                        </tbody>
+                </table>
+            </div>
+
+            <div class="screen-only" style="margin-top:15px;">
+                <label class="label">📌 Observation générale de la journée :</label>
+                <textarea id="obsGlobal" class="input" rows="2" placeholder="Notez ici les points importants du brief..."></textarea>
+            </div>
+
+            <div class="print-footer">
+                <div class="print-obs-box">
+                    <div class="print-obs-label">OBSERVATION :</div>
+                    </div>
+                
+                <div class="print-bottom-row">
+                    <div class="print-info-left" id="printTime">Imprimé le : --/--/----</div>
+                    
+                    <div class="print-logo">
+                        <img src="./assets/grdf-logo.png" alt="Logo GRDF" class="print-logo-img">
+                    </div>
+                    
+                    <div class="print-info-right">Page 1/1</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tabParam" class="support-panel">
+            <h3 class="h2" style="font-size:18px; margin-bottom:15px;">Activités & Couleurs</h3>
+            <div id="paramGrid" class="param-grid"></div>
+            
+            <div style="margin-top:20px; padding:15px; background:#fff; border:1px solid var(--line); border-radius:8px; display:flex; gap:10px; align-items:center;">
+                <input type="text" id="newActName" class="input" placeholder="Nom nouvelle activité..." style="width:200px;">
+                <input type="color" id="newActColor" value="#3b82f6" style="height:38px; width:50px; padding:0; border:none; cursor:pointer;">
+                <button class="btn" onclick="SupportModule.addActivity()">➕ Ajouter</button>
+            </div>
+        </div>
+
+        <div id="tabHistory" class="support-panel">
+            <h3 class="h2" style="font-size:18px; margin-bottom:15px;">Statistiques & Archives</h3>
+            
+            <div class="stats-container">
+                <div class="stat-box">
+                    <div class="stat-num" id="statDays">0</div>
+                    <div class="stat-lbl">Jours Saisis</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-num" id="statRecords">0</div>
+                    <div class="stat-lbl">Lignes totales</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-num" id="statTopAct">-</div>
+                    <div class="stat-lbl">Top Activité</div>
+                </div>
+            </div>
+
+            <div class="support-toolbar">
+                <input type="date" id="histDateFrom" class="input" style="width:auto;">
+                <span style="align-self:center">à</span>
+                <input type="date" id="histDateTo" class="input" style="width:auto;">
+                <select id="histFilterAgent" class="select" style="width:auto;"><option value="">Tous agents</option></select>
+                <button class="btn" onclick="SupportModule.renderHistory()">🔍 Filtrer</button>
+            </div>
+
+            <div class="brief-table-container" style="max-height:600px;">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th onclick="SupportModule.sortHistory('date')">Date ↕</th>
+                            <th onclick="SupportModule.sortHistory('agent')">Agent ↕</th>
+                            <th>Activité</th>
+                            <th>Obs</th>
+                            <th>Brief</th>
+                            <th>Débrief</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+      </section>
+
+      <div id="modal" class="modal" aria-hidden="true">
+        <div class="modal__backdrop" data-close="1"></div>
+        <div class="modal__panel card">
+          <div class="modal__top">
+            <div>
+              <div id="modalTitle" class="modal__title">Aperçu</div>
+              <div id="modalSubtitle" class="modal__sub"></div>
+            </div>
+
+            <div class="modal__actions">
+              <button id="btnPrevPage" class="btn btn--secondary">
+                <span>←</span> Page -
+              </button>
+              <button id="btnNextPage" class="btn btn--secondary">
+                Page + <span>→</span>
+              </button>
+              <button id="btnExportBt" class="btn">
+                <span>💾</span> Exporter BT (PDF)
+              </button>
+              <button class="btn btn--secondary" data-close="1">Fermer</button>
+            </div>
+          </div>
+
+          <div class="modal__body">
+            <canvas id="canvas"></canvas>
+          </div>
+
+          <div class="modal__footer">
+            <div id="modalInfo" class="hint"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Modal Connexion Supabase ===== -->
+  <div id="loginModal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.55); align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:12px; padding:32px 36px; width:360px; box-shadow:0 8px 32px rgba(0,0,0,.25); font-family:inherit;">
+      <h2 style="margin:0 0 6px; font-size:1.1rem; color:#1e293b;">🔐 Connexion DEMAT-BT</h2>
+      <p style="margin:0 0 20px; font-size:.82rem; color:#64748b;">Entrez vos identifiants pour synchroniser vos données.</p>
+
+      <!-- Le formulaire avec autocomplete pour que Chrome/Edge propose les identifiants enregistrés -->
+      <form id="loginForm" autocomplete="on" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label for="loginEmail" style="font-size:.8rem; font-weight:600; color:#374151;">Email</label>
+          <input
+            id="loginEmail"
+            name="email"
+            type="email"
+            autocomplete="username email"
+            placeholder="prenom.nom@grdf.fr"
+            required
+            style="border:1px solid #d1d5db; border-radius:6px; padding:9px 12px; font-size:.9rem; outline:none; transition:border .15s;"
+            onfocus="this.style.borderColor='#6366f1'"
+            onblur="this.style.borderColor='#d1d5db'"
+          />
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label for="loginPassword" style="font-size:.8rem; font-weight:600; color:#374151;">Mot de passe</label>
+          <input
+            id="loginPassword"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="••••••••"
+            required
+            style="border:1px solid #d1d5db; border-radius:6px; padding:9px 12px; font-size:.9rem; outline:none; transition:border .15s;"
+            onfocus="this.style.borderColor='#6366f1'"
+            onblur="this.style.borderColor='#d1d5db'"
+          />
+        </div>
+        <div id="loginError" style="display:none; background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; border-radius:6px; padding:8px 12px; font-size:.82rem;"></div>
+        <div style="display:flex; gap:10px; margin-top:4px;">
+          <button
+            type="submit"
+            id="loginSubmit"
+            style="flex:1; background:#6366f1; color:#fff; border:none; border-radius:6px; padding:10px; font-size:.9rem; font-weight:600; cursor:pointer; transition:background .15s;"
+            onmouseover="this.style.background='#4f46e5'"
+            onmouseout="this.style.background='#6366f1'"
+          >Se connecter</button>
+          <button
+            type="button"
+            id="loginCancel"
+            style="padding:10px 16px; border:1px solid #d1d5db; border-radius:6px; background:#fff; font-size:.9rem; cursor:pointer; color:#374151;"
+          >Annuler</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <!-- ===== Fin Modal Connexion ===== -->
+
+  <!-- ===== Modal Changement de mot de passe (première connexion) ===== -->
+  <div id="changePasswordModal" style="display:none; position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.70); align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:12px; padding:32px 36px; width:400px; box-shadow:0 8px 40px rgba(0,0,0,.35); font-family:inherit;">
+      <!-- Bannière alerte -->
+      <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:10px 14px; margin-bottom:20px; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:1.4rem;">🔑</span>
+        <div>
+          <div style="font-size:.82rem; font-weight:800; color:#92400e;">Première connexion</div>
+          <div style="font-size:.78rem; color:#78350f; margin-top:2px;">Vous devez définir un nouveau mot de passe avant de continuer.</div>
+        </div>
+      </div>
+      <h2 style="margin:0 0 18px; font-size:1.05rem; color:#1e293b;">Choisissez votre mot de passe</h2>
+      <form id="changePasswordForm" autocomplete="off" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label for="newPassword" style="font-size:.8rem; font-weight:600; color:#374151;">Nouveau mot de passe</label>
+          <input id="newPassword" name="new-password" type="password" autocomplete="new-password"
+            placeholder="Au moins 8 caractères" required minlength="8"
+            style="border:1px solid #d1d5db; border-radius:6px; padding:9px 12px; font-size:.9rem; outline:none; transition:border .15s;"
+            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#d1d5db'" />
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label for="confirmPassword" style="font-size:.8rem; font-weight:600; color:#374151;">Confirmer le mot de passe</label>
+          <input id="confirmPassword" name="confirm-password" type="password" autocomplete="new-password"
+            placeholder="Répétez le mot de passe" required minlength="8"
+            style="border:1px solid #d1d5db; border-radius:6px; padding:9px 12px; font-size:.9rem; outline:none; transition:border .15s;"
+            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#d1d5db'" />
+        </div>
+        <!-- Indicateur de force -->
+        <div id="pwStrengthBar" style="height:4px; border-radius:4px; background:#e5e7eb; overflow:hidden; margin-top:-6px;">
+          <div id="pwStrengthFill" style="height:100%; width:0%; transition:width .3s, background .3s;"></div>
+        </div>
+        <div id="pwStrengthLabel" style="font-size:.75rem; color:#9ca3af; margin-top:-8px;"></div>
+        <div id="changePasswordError" style="display:none; background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; border-radius:6px; padding:8px 12px; font-size:.82rem;"></div>
+        <button type="submit" id="changePasswordSubmit"
+          style="background:#10b981; color:#fff; border:none; border-radius:6px; padding:11px; font-size:.9rem; font-weight:700; cursor:pointer; margin-top:4px; transition:background .15s;"
+          onmouseover="this.style.background='#059669'" onmouseout="this.style.background='#10b981'">
+          ✅ Enregistrer mon mot de passe
+        </button>
+      </form>
+    </div>
+  </div>
+  <!-- ===== Fin Modal Changement mot de passe ===== -->
+
+  <script src="./libs/pdf-lib/pdf-lib.min.js"></script>
+
+  <script src="./data/technicians.js"></script>
+
+  <script src="./js/utils.js"></script>
+  <script src="./js/state.js"></script>
+
+  <script src="./js/badge-engine.js"></script>
+  <script src="./js/classify.js"></script>
+  <script src="./js/weather.js"></script>
+
+  <script src="./js/cache.js"></script>
+  <script src="./js/pdf-extractor.js"></script>
+  <script src="./js/export.js"></script>
+
+  <script src="./js/ui/components.js"></script>
+  <script src="./js/ui/sidebar.js"></script>
+  <script src="./js/ui/grid.js"></script>
+  <script src="./js/ui/timeline.js"></script>
+  <script src="./js/ui/brief.js"></script>
+  <script src="./js/ui/modal.js"></script>
+  
+  <script src="./js/ui/support.js"></script>
+  <script src="./js/ui/support-print-fix.js"></script>
+  
+  <script src="libs/supabase/supabase.min.js"></script>
+  <script src="js/supabase.js"></script>
+  <script src="./js/main.js"></script>
+</body>
+</html>
