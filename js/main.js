@@ -18,7 +18,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setPdfStatus = function (msg) {
         const el = document.getElementById('pdfStatus');
         const badge = document.getElementById('pdfBadge');
-        if (el) el.textContent = msg;
+        const raw = String(msg || "");
+        let display = raw;
+
+        if (raw && raw !== "Aucun PDF" && raw !== "Aucun PDF chargé" && !raw.toLowerCase().includes('erreur')) {
+            const day = (typeof extractDayFromFilename === 'function') ? extractDayFromFilename(raw) : null;
+            display = day ? `Journée du ${day}` : "PDF chargé (date non détectée)";
+        }
+
+        if (el) el.textContent = display;
         const ok = msg && msg !== 'Aucun PDF' && msg !== 'Aucun PDF chargé' && !msg.toLowerCase().includes('erreur');
         if (badge) badge.classList.toggle('status--loaded', !!ok);
     };
@@ -269,6 +277,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnExport) {
         btnExport.addEventListener('click', () => {
             if (typeof exportBTPDF === 'function') exportBTPDF();
+        });
+    }
+
+    // Bouton Export Journée (Brief)
+    const btnExportDay = document.getElementById('btnExportDay');
+    if (btnExportDay) {
+        btnExportDay.addEventListener('click', async () => {
+            if (typeof exportDayPdfAndPrepareMail === 'function') {
+                await exportDayPdfAndPrepareMail();
+            } else if (typeof exportDayPDF === 'function') {
+                await exportDayPDF();
+            }
         });
     }
 

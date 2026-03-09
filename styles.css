@@ -71,6 +71,23 @@ body{
   backdrop-filter: blur(10px);
 }
 
+.brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+
+.brand__logo{
+  width:auto;
+  height:64px;
+  object-fit:contain;
+  flex:0 0 auto;
+}
+
+.brand__text{
+  min-width:0;
+}
 
 .brand__title{ 
   font-weight:800; 
@@ -1167,6 +1184,10 @@ body.flip .kpi{
   .topbar{
     padding:12px;
   }
+
+  .brand__logo{
+    height:44px;
+  }
   
   .layout{
     padding:12px;
@@ -1578,4 +1599,5 @@ table.history-table td { padding: 8px 10px; border-bottom: 1px solid var(--line)
   .print-logo {
     text-align: center !important;
   }
+  
 }
