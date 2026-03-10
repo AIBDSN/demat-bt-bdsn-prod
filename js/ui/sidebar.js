@@ -1,4 +1,4 @@
-/* js/ui/sidebar.js — DEMAT-BT v11.0.0 — 16/02/2026
+/* js/ui/sidebar.js — DEMAT-BT v11.5.0 — 16/02/2026
    Sidebar : liste techniciens, filtres par type de document, recherche et KPIs
 */
 

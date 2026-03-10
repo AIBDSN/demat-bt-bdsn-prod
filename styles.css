@@ -460,6 +460,20 @@ body{
   margin-right:4px;
 }
 
+.display-modes{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.display-modes__label{
+  font-size:11px;
+  font-weight:700;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+
 /* =====================
    PROGRESS BAR
    ===================== */
@@ -565,9 +579,107 @@ body{
    ===================== */
 .grid{
   margin-top:16px;
-  display:grid; 
-  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); 
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
   gap:14px;
+}
+
+.grid--small{
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap:10px;
+}
+
+/* Vue Référent groupée :
+   blocs techniciens encadrés et distribués ligne par ligne. */
+.grid--grouped-large,
+.grid--grouped-small{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  align-content:flex-start;
+}
+
+.grid--grouped-large{
+  gap:14px;
+}
+
+.grid--grouped-small{
+  gap:12px;
+}
+
+.grid--grouped-large .referent-group{
+  flex:0 1 calc((var(--group-cols, 2) * 320px) + ((var(--group-cols, 2) - 1) * 12px) + 28px);
+}
+
+.grid--grouped-small .referent-group{
+  flex:0 1 calc((var(--group-cols, 3) * 220px) + ((var(--group-cols, 3) - 1) * 8px) + 24px);
+}
+
+.grid--list{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.referent-group{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:10px;
+  border:1.5px solid #c7d8ee;
+  border-radius:var(--radius-sm);
+  background:linear-gradient(180deg, #f5f9ff 0%, #eef4fc 100%);
+  box-shadow:var(--shadow-sm);
+}
+
+.referent-group__title{
+  padding:0 2px;
+  margin:0;
+  font-size:14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.referent-group__name{
+  min-width:0;
+  font-weight:800;
+}
+
+.referent-group__count{
+  flex:0 0 auto;
+  padding:2px 8px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  color:#17499c;
+  background:#e8f1ff;
+  border:1px solid #c8dcff;
+}
+
+.referent-group__grid{ margin-top:0; }
+
+.referent-group--large .referent-group__grid{
+  width:100%;
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  align-items:stretch;
+  gap:12px;
+}
+
+.referent-group--small .referent-group__grid{
+  width:100%;
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items:stretch;
+  gap:8px;
+}
+
+.referent-group--list .referent-group__title{
+  font-size:13px;
+  margin-bottom:-2px;
 }
 
 /* =====================
@@ -725,7 +837,11 @@ body{
    BT CARDS
    ===================== */
 .btCard{ 
-  padding:16px; 
+  padding:16px;
+  min-height:188px;
+  width:100%;
+  box-sizing:border-box;
+  background:#fff;
 }
 
 .btTop{ 
@@ -804,6 +920,84 @@ body{
   padding:8px 12px;
   border-radius:var(--radius-xs);
 }
+
+
+.bt-meta{
+  font-size:13px;
+  color:var(--muted);
+  margin-bottom:12px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  font-weight:500;
+}
+
+.bt-meta--compact{
+  font-size:12px;
+  gap:4px;
+  margin-bottom:8px;
+}
+
+.bt-meta > div{
+  line-height:1.4;
+}
+
+.btCard--small{
+  padding:12px;
+  min-height:164px;
+}
+
+.btCard--small .btTop{ margin-bottom:8px; }
+.btCard--small .btId{ font-size:15px; }
+.bt-doc-count{ font-size:11px; color:var(--muted); }
+
+.bt-list{
+  border:1.5px solid var(--line);
+  border-radius:var(--radius-sm);
+  overflow:auto;
+  background:#fff;
+  width:100%;
+}
+
+.bt-list__table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:980px;
+}
+
+.bt-list__table th,
+.bt-list__table td{
+  padding:8px 10px;
+  border-bottom:1px solid var(--line);
+  text-align:left;
+  font-size:12px;
+  vertical-align:middle;
+}
+
+.bt-list__table th{
+  font-size:12px;
+  color:var(--txt-light);
+  background:#f8fafc;
+}
+
+.list-sub{ font-size:11px; color:var(--muted); }
+.list-time{ font-weight:700; }
+.bt-list__table .category-badge{ margin-top:4px; }
+.bt-list__table .team-line{ font-size:12px; gap:4px; }
+.bt-list__table .team-line__sep{ margin:0 1px; }
+.team-line--compact{ gap:4px; }
+.list-docs{
+  display:inline-flex;
+  min-width:28px;
+  justify-content:center;
+  border-radius:999px;
+  background:#e2e8f0;
+  color:#0f172a;
+  padding:2px 8px;
+  font-weight:800;
+}
+
+.btn-open-bt{ padding:6px 10px; font-size:12px; }
 
 /* =====================
    CHIPS (Filters)
@@ -1600,4 +1794,9 @@ table.history-table td { padding: 8px 10px; border-bottom: 1px solid var(--line)
     text-align: center !important;
   }
   
+}
+
+@media (max-width: 900px){
+  .display-modes{ width:100%; }
+  #referentDisplayModeSwitch{ width:100%; }
 }
