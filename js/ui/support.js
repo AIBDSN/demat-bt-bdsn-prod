@@ -7,6 +7,7 @@
 // NEW v1.2: loadHistoryFromSupabase() reconstruit history[] depuis TOUTES les lignes Supabase
 //           → L'onglet Données & Historique affiche maintenant les données cross-session
 //           → switchTab('tabHistory') déclenche un rechargement Supabase automatique
+// V3.3: compatibilité historique + attendanceType (present/absent/neutral)
 
 window.SupportModule = (function() {
     
@@ -17,6 +18,9 @@ window.SupportModule = (function() {
     let currentDate = new Date();
     let history = [];
     let activities = [];
+    let editingActivityIndex = null;
+    let activitySearchTerm = '';
+    let toastTimer = null;
     let sortKey = 'date';
     let sortDir = -1; // -1 = décroissant (plus récent en haut)
 
@@ -59,7 +63,6 @@ window.SupportModule = (function() {
 
     // Codes considérés comme "Absence" pour les KPIs et l'affichage rouge
     const ABSENCE_CODES = new Set(["CP","10","21","41","RTT","ABS","PAT","MALADIE"]);
-    const PARAMS_JOUR_KEY = "__PARAM_ACTIVITIES__";
 
     // ============================================================
     // 2. UTILITAIRES
@@ -89,6 +92,134 @@ window.SupportModule = (function() {
         const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b; 
         return luma > 128;
     };
+
+    const DEFAULT_ACTIVITY_COLOR = '#94a3b8';
+    const ABSENT_LABELS = new Set(["ABS","RTT","CP","MALADIE","GREVE"]);
+
+    const slugify = (text) => String(text || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'activity';
+
+    function inferAttendanceType(label) {
+        const key = String(label || '').trim().toUpperCase();
+        if (!key) return 'present';
+        return ABSENT_LABELS.has(key) ? 'absent' : 'present';
+    }
+
+    function sanitizeAttendanceType(value, fallbackLabel = '') {
+        const v = String(value || '').trim().toLowerCase();
+        if (v === 'present' || v === 'absent' || v === 'neutral') return v;
+        return inferAttendanceType(fallbackLabel);
+    }
+
+    function attendanceBadge(type) {
+        if (type === 'absent') return { text: 'Absent', bg: '#fee2e2', fg: '#991b1b' };
+        if (type === 'neutral') return { text: 'Neutre', bg: '#e2e8f0', fg: '#334155' };
+        return { text: 'Présent', bg: '#dcfce7', fg: '#166534' };
+    }
+
+    function normalizeActivity(raw, fallbackColor = DEFAULT_ACTIVITY_COLOR) {
+        if (!raw) return null;
+        const base = (typeof raw === 'string') ? { label: raw } : raw;
+
+        const label = String(base.label || base.name || base.code || '').trim();
+        if (!label) return null;
+
+        const code = String(base.code || slugify(label)).trim();
+        const color = String(base.color || fallbackColor).trim() || DEFAULT_ACTIVITY_COLOR;
+
+        return {
+            code,
+            label,
+            name: String(base.name || label).trim() || label,
+            color,
+            attendanceType: sanitizeAttendanceType(base.attendanceType, label),
+        };
+    }
+
+    const activityDisplayLabel = (act) => String(act?.label || act?.name || act?.code || 'activité');
+    const escapeHtml = (value) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+    function activityMatchKey(raw) {
+        if (!raw) return '';
+        const norm = normalizeActivity(raw);
+        if (!norm) return '';
+        return (norm.code || slugify(norm.label)).toLowerCase();
+    }
+
+    function mergeActivities(list) {
+        const byKey = new Map();
+        let mergedCount = 0;
+
+        const upsert = (raw) => {
+            const norm = normalizeActivity(raw);
+            if (!norm) return;
+            const key = activityMatchKey(norm);
+            if (!key) return;
+
+            if (!byKey.has(key)) {
+                byKey.set(key, norm);
+                return;
+            }
+
+            const prev = byKey.get(key);
+            const color = (prev.color && prev.color !== DEFAULT_ACTIVITY_COLOR) ? prev.color : norm.color;
+            const label = prev.label || norm.label;
+            const name = prev.name || norm.name || label;
+            const code = prev.code || norm.code || slugify(label);
+
+            const attendanceType = prev.attendanceType || norm.attendanceType || inferAttendanceType(label);
+            byKey.set(key, { code, label, name, color: color || DEFAULT_ACTIVITY_COLOR, attendanceType });
+            mergedCount += 1;
+        };
+
+        (list || []).forEach(upsert);
+        return { activities: Array.from(byKey.values()), mergedCount };
+    }
+
+    function findActivityByValue(value) {
+        const v = String(value || '').trim();
+        if (!v) return null;
+        const lowered = v.toLowerCase();
+        return activities.find(a => {
+            const label = activityDisplayLabel(a).toLowerCase();
+            const code = String(a?.code || '').toLowerCase();
+            const name = String(a?.name || '').toLowerCase();
+            return label === lowered || code === lowered || name === lowered;
+        }) || null;
+    }
+
+    function extractHistoricalActivitiesFromRows(rows) {
+        const found = [];
+
+        (rows || []).forEach(row => {
+            const payload = row?.payload;
+            if (!payload || typeof payload !== 'object') return;
+
+            if (Array.isArray(payload.__PARAM_ACTIVITIES)) {
+                payload.__PARAM_ACTIVITIES.forEach(a => found.push(a));
+            }
+
+            Object.keys(payload).forEach(key => {
+                if (key === '__GLOBAL_OBS' || key === '__PARAM_ACTIVITIES') return;
+                const item = payload[key];
+                if (!item || typeof item !== 'object') return;
+
+                if (item.act && typeof item.act === 'string') {
+                    found.push({ label: item.act, color: item.actColor || item.color || DEFAULT_ACTIVITY_COLOR });
+                } else if (item.act && typeof item.act === 'object') {
+                    found.push(item.act);
+                }
+            });
+        });
+
+        return found;
+    }
 
     // ============================================================
     // 3. INITIALISATION & NAVIGATION
@@ -230,25 +361,37 @@ window.SupportModule = (function() {
             const rowData = savedDay[tech.name] || {};
             
             // Récupération de l'activité
-            const actName = rowData.act || '';
-            const actObj = activities.find(a => a.name === actName);
+            const actName = String(rowData.act || '').trim();
+            let actObj = findActivityByValue(actName);
+            if (actName && !actObj) {
+                // V3.3 — activité historique inconnue: création temporaire en mémoire
+                actObj = normalizeActivity({
+                    label: actName,
+                    color: DEFAULT_ACTIVITY_COLOR,
+                    attendanceType: 'present',
+                    code: `tmp_${slugify(actName)}_${Date.now()}`
+                });
+                if (actObj) activities.push(actObj);
+            }
+            const actLabel = actObj ? activityDisplayLabel(actObj) : actName;
             
             // Gestion Couleur
-            const bgColor = actObj ? actObj.color : '';
+            const bgColor = actObj?.color || DEFAULT_ACTIVITY_COLOR;
             const fgColor = isLight(bgColor) ? '#000' : '#fff';
             const borderColor = bgColor || '#e2e8f0';
 
-            // Calculs KPI
-            if(ABSENCE_CODES.has(actName)) cptAbs++;
-            else if (actName && actName !== '') cptPres++;
+            // Calculs KPI (V3.3 basé sur attendanceType)
+            const attendanceType = actObj?.attendanceType || sanitizeAttendanceType('', actName);
+            if(attendanceType === 'absent') cptAbs++;
+            else if (attendanceType === 'present') cptPres++;
             
             if(rowData.Grv === 'OUI') cptGrv++;
 
             // Création de la ligne
             const tr = document.createElement('tr');
             
-            // Si absent, on met tout la ligne en rouge pâle (style Excel)
-            if(ABSENCE_CODES.has(actName)) {
+            // Si absent, on met toute la ligne en rouge pâle
+            if(attendanceType === 'absent' || ABSENCE_CODES.has(actName)) {
                 tr.classList.add('row-absent');
             }
 
@@ -267,7 +410,11 @@ window.SupportModule = (function() {
                     <select class="editable-select input-act" data-tech="${tech.name}" 
                             style="background-color:${bgColor}; color:${fgColor}; border-color:${borderColor};">
                         <option value="">-</option>
-                        ${activities.map(a => `<option value="${a.name}" ${actName===a.name?'selected':''}>${a.name}</option>`).join('')}
+                        ${activities.map(a => {
+                            const label = activityDisplayLabel(a);
+                            return `<option value="${label}" ${actLabel===label?'selected':''}>${label}</option>`;
+                        }).join('')}
+                        ${actLabel && !activities.some(a => activityDisplayLabel(a) === actLabel) ? `<option value="${actLabel}" selected>${actLabel}</option>` : ''}
                     </select>
                 </td>
                 
@@ -294,7 +441,7 @@ window.SupportModule = (function() {
         // Mise à jour des compteurs (KPI)
         const elPres = document.getElementById('kpiPres');
         const elAbs = document.getElementById('kpiAbs');
-        const elGRV = document.getElementById('kpiGrv');
+        const elGrv = document.getElementById('kpiGreve');
         
         if(elPres) elPres.textContent = cptPres;
         if(elAbs) elAbs.textContent = cptAbs;
@@ -332,7 +479,7 @@ window.SupportModule = (function() {
         // 1. Changement visuel immédiat
         if(el.classList.contains('input-act')) {
             const actName = el.value;
-            const actObj = activities.find(a => a.name === actName);
+            const actObj = findActivityByValue(actName);
             const color = actObj ? actObj.color : '';
             
             el.style.backgroundColor = color;
@@ -362,7 +509,6 @@ window.SupportModule = (function() {
         // Sauvegarde Obs Globale
         const obsGlobal = document.getElementById('obsGlobal');
         if(obsGlobal) dayData['__GLOBAL_OBS'] = obsGlobal.value;
-        dayData['__PARAM_ACTIVITIES'] = activities;
 
         // Sauvegarde Lignes
         const rows = document.getElementById('briefTableBody').querySelectorAll('tr');
@@ -455,133 +601,322 @@ window.SupportModule = (function() {
     // ============================================================
 
     function renderParams() {
+        renderActivitiesGrid();
+    }
+
+    function renderActivitiesGrid() {
         const grid = document.getElementById('paramGrid');
         if(!grid) return;
 
-        grid.innerHTML = activities.map((a, index) => `
-            <div class="param-card" style="justify-content:space-between;">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="color" value="${a.color}" 
+        if (editingActivityIndex !== null && !activities[editingActivityIndex]) {
+            editingActivityIndex = null;
+        }
+
+        const filteredActivities = activities
+            .map((a, index) => ({ a, index }))
+            .filter(({ a }) => !activitySearchTerm || activityDisplayLabel(a).toLowerCase().includes(activitySearchTerm));
+
+        if (activitySearchTerm) {
+            console.log('[ACTIVITY] search filter active');
+        }
+
+        grid.innerHTML = filteredActivities.map(({ a, index }) => {
+            const safeLabel = escapeHtml(activityDisplayLabel(a));
+            return `
+            <div class="param-card ${editingActivityIndex === index ? 'param-card--editing' : ''}">
+                <div class="param-card__color-zone">
+                    <input type="color" value="${a?.color || DEFAULT_ACTIVITY_COLOR}" 
                            onchange="SupportModule.updateActivityColor(${index}, this.value)"
-                           style="width:30px; height:30px; border:none; background:none; cursor:pointer;"
+                           class="param-color-input"
                            title="Changer la couleur">
-                    
-                    <div style="font-weight:bold; font-size:12px;">${a.name}</div>
                 </div>
-                
-                <button onclick="SupportModule.deleteActivity(${index})" 
-                        style="background:none; border:none; color:#ef4444; font-weight:bold; font-size:18px; cursor:pointer; padding:0 5px;"
-                        title="Supprimer cette activité">
-                    &times;
-                </button>
+
+                <div class="param-card__main-zone">
+                    ${editingActivityIndex === index
+                        ? `
+                        <div class="param-edit-grid">
+                            <input id="editActName_${index}" type="text" class="input" value="${safeLabel}" placeholder="Nom activité">
+                            <select id="editActAttendanceType_${index}" class="select">
+                                <option value="present" ${(sanitizeAttendanceType(a?.attendanceType, activityDisplayLabel(a)) === 'present') ? 'selected' : ''}>Présent</option>
+                                <option value="absent" ${(sanitizeAttendanceType(a?.attendanceType, activityDisplayLabel(a)) === 'absent') ? 'selected' : ''}>Absent</option>
+                                <option value="neutral" ${(sanitizeAttendanceType(a?.attendanceType, activityDisplayLabel(a)) === 'neutral') ? 'selected' : ''}>Neutre</option>
+                            </select>
+                        </div>
+                        `
+                        : `
+                        <div class="param-card__label">${safeLabel}</div>
+                        ${(() => {
+                            const badge = attendanceBadge(a?.attendanceType || 'present');
+                            return `<span class="param-badge" style="background:${badge.bg}; color:${badge.fg};">${badge.text}</span>`;
+                        })()}
+                        `
+                    }
+                </div>
+
+                <div class="param-card__actions">
+                    ${editingActivityIndex === index
+                        ? `
+                        <button class="btn btn--secondary param-action-btn" onclick="SupportModule.cancelEditActivity()" title="Annuler">Annuler</button>
+                        <button class="btn param-action-btn" onclick="SupportModule.saveEditedActivity(${index})" title="Valider">Enregistrer</button>
+                        `
+                        : `
+                        <button class="btn btn--secondary param-action-btn" onclick="SupportModule.startEditActivity(${index})" title="Modifier cette activité">Modifier</button>
+                        <button class="btn btn--secondary param-action-btn param-action-btn--danger" onclick="SupportModule.deleteActivity(${index})" title="Supprimer cette activité">Supprimer</button>
+                        `
+                    }
+                </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        if (!grid.innerHTML) {
+            grid.innerHTML = `<div class="param-card"><div class="param-card__main-zone"><div class="param-card__label">Aucune activité trouvée.</div></div></div>`;
+        }
     }
 
     function addActivity() {
         const nameInput = document.getElementById('newActName');
         const colorInput = document.getElementById('newActColor');
+        const attendanceInput = document.getElementById('newActAttendanceType');
         
-        const name = nameInput.value.trim().toUpperCase();
-        const color = colorInput.value;
-        
-        if(name) {
-            if(activities.find(a => a.name === name)) {
-                alert("Cette activité existe déjà !");
+        const label = nameInput?.value?.trim() || '';
+        const color = colorInput?.value || DEFAULT_ACTIVITY_COLOR;
+        const selectedType = sanitizeAttendanceType(attendanceInput?.value, label);
+
+        if(label) {
+            const candidate = normalizeActivity({
+                label,
+                color,
+                attendanceType: selectedType,
+                code: `${slugify(label)}_${Date.now()}`
+            });
+            const duplicate = activities.some(a => {
+                const sameCode = String(a?.code || '').toLowerCase() === String(candidate?.code || '').toLowerCase();
+                const sameLabel = activityDisplayLabel(a).toLowerCase() === activityDisplayLabel(candidate).toLowerCase();
+                return sameCode || sameLabel;
+            });
+            if(duplicate) {
+                showActivityToast("Cette activité existe déjà.", 'warn');
                 return;
             }
-            activities.push({ name, color });
-            saveActivities();
+            activities.push(candidate);
+            saveActivities({ successMessage: "Activité enregistrée dans la base." });
             nameInput.value = ''; // Reset champ
         } else {
-            alert("Veuillez entrer un nom d'activité.");
+            showActivityToast("Veuillez entrer un nom d'activité.", 'warn');
         }
     }
 
     function deleteActivity(index) {
-        const actName = activities[index].name;
+        if (!activities[index]) return;
+        const actName = activityDisplayLabel(activities[index]);
         if(confirm(`Supprimer définitivement l'activité "${actName}" ?`)) {
             activities.splice(index, 1);
-            saveActivities();
+            if (editingActivityIndex === index) editingActivityIndex = null;
+            if (editingActivityIndex !== null && editingActivityIndex > index) editingActivityIndex -= 1;
+            saveActivities({ successMessage: "Activité supprimée." });
         }
+    }
+
+    function startEditActivity(index) {
+        if (!activities[index]) return;
+        editingActivityIndex = index;
+        renderParams();
+    }
+
+    function cancelEditActivity() {
+        editingActivityIndex = null;
+        renderParams();
+    }
+
+    function saveEditedActivity(index) {
+        if (!activities[index]) return;
+
+        const nameInput = document.getElementById(`editActName_${index}`);
+        const attendanceInput = document.getElementById(`editActAttendanceType_${index}`);
+        const nextLabel = nameInput?.value?.trim() || '';
+        const nextAttendance = sanitizeAttendanceType(attendanceInput?.value, nextLabel);
+
+        if (!nextLabel) {
+            showActivityToast("Le nom de l'activité ne peut pas être vide.", 'warn');
+            return;
+        }
+
+        const duplicate = activities.some((a, idx) => {
+            if (idx === index) return false;
+            return activityDisplayLabel(a).toLowerCase() === nextLabel.toLowerCase();
+        });
+
+        if (duplicate) {
+            showActivityToast("Une activité avec ce nom existe déjà.", 'warn');
+            return;
+        }
+
+        activities[index] = normalizeActivity({
+            ...activities[index],
+            label: nextLabel,
+            name: nextLabel,
+            attendanceType: nextAttendance,
+        }, activities[index]?.color || DEFAULT_ACTIVITY_COLOR);
+
+        editingActivityIndex = null;
+        saveActivities({ successMessage: "Activité mise à jour dans la base." });
     }
 
     function updateActivityColor(index, newColor) {
-        activities[index].color = newColor;
-        saveActivities();
+        if (!activities[index]) return;
+        activities[index].color = newColor || DEFAULT_ACTIVITY_COLOR;
+        saveActivities({ successMessage: "Activité mise à jour dans la base." });
     }
 
-    function saveActivities() {
+    async function saveActivities({ successMessage = '' } = {}) {
+        activities = mergeActivities(activities).activities;
         localStorage.setItem('demat_activities', JSON.stringify(activities));
 
+        const saveAttemptId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        console.log(`[ACTIVITY][${saveAttemptId}] 💾 local save done (${activities.length} activités)`);
+
         // Synchronisation cloud best-effort (sans bloquer l'UI)
-        saveActivitiesToSupabase();
+        const syncResult = await saveActivitiesToSupabase({ saveAttemptId });
 
         renderParams(); // Mettre à jour la grille
         renderTable();  // Mettre à jour le tableau principal (couleurs)
-    }
 
-    async function saveActivitiesToSupabase() {
-        if (!window.SupportStore || !window.supabaseClient) return;
-
-        try {
-            const { data: authData } = await window.supabaseClient.auth.getUser();
-            if (!authData?.user) return;
-
-            // Sauvegarde dédiée des paramètres pour éviter toute dépendance
-            // à la sauvegarde de la fiche du jour.
-            await window.SupportStore.saveSupport(
-                { __PARAM_ACTIVITIES: activities },
-                { jour: PARAMS_JOUR_KEY }
-            );
-            console.log("☁️ Param activités sauvegardés sur Supabase (clé dédiée)");
-        } catch (e) {
-            console.warn("⚠️ Sauvegarde Supabase des paramètres activités échouée:", e.message);
+        if (successMessage) {
+            if (syncResult.status === 'ok') {
+                showActivityToast(successMessage);
+            } else if (syncResult.status === 'local') {
+                showActivityToast("Sauvegarde locale OK. Supabase indisponible/non connecté.", 'warn');
+            } else if (syncResult.status === 'error') {
+                showActivityToast(syncResult.toastMessage || "Erreur lors de l'enregistrement.", 'error');
+            }
         }
     }
 
-    async function loadActivitiesFromSupabase() {
-        if (!window.SupportStore || !window.supabaseClient) return;
+    function mapSaveFailureToToast(category) {
+        if (category === 'auth') return "Échec Supabase: session expirée / authentification requise.";
+        if (category === 'network') return "Échec Supabase: problème réseau (sauvegarde locale conservée).";
+        if (category === 'rls') return "Échec Supabase: accès refusé par les règles RLS.";
+        if (category === 'sql') return "Échec Supabase: erreur d'écriture SQL/upsert.";
+        return "Erreur lors de l'enregistrement Supabase (sauvegarde locale conservée).";
+    }
 
+    // V3.3 — Param activités partagés via support_settings (avec attendanceType)
+    async function saveActivitiesToSupabase({ saveAttemptId = 'n/a' } = {}) {
+        if (!window.SupportStore || !window.supabaseClient) {
+            console.warn(`[ACTIVITY][${saveAttemptId}] ⚠️ Supabase non disponible -> local only`);
+            return { status: 'local', category: 'auth', toastMessage: "Sauvegarde locale OK. Supabase indisponible." };
+        }
+
+        const start = performance.now();
         try {
-            const { data: authData } = await window.supabaseClient.auth.getUser();
-            if (!authData?.user) return;
+            const payload = { activities: mergeActivities(activities).activities };
+            console.log(`[ACTIVITY][${saveAttemptId}] ⏳ supabase saveSetting start rows=${payload.activities.length}`);
 
-            // 1) Source principale : ligne dédiée
-            const { data: dedicated, error: dedicatedErr } = await window.supabaseClient
-                .from("support_journee")
-                .select("payload")
-                .eq("site", "VLG")
-                .eq("jour", PARAMS_JOUR_KEY)
-                .maybeSingle();
+            const result = await window.SupportStore.saveSetting("PARAM_ACTIVITIES", payload, { site: "VLG" });
 
-            if (dedicatedErr) throw dedicatedErr;
-            if (Array.isArray(dedicated?.payload?.__PARAM_ACTIVITIES)) {
-                activities = dedicated.payload.__PARAM_ACTIVITIES;
-                localStorage.setItem('demat_activities', JSON.stringify(activities));
-                console.log("☁️ Param activités chargés depuis Supabase (clé dédiée)");
-                return;
+            const durationMs = Math.round(performance.now() - start);
+            console.log(`[ACTIVITY][${saveAttemptId}] ✅ Supabase confirmed write in ${durationMs}ms`, result);
+            return { status: 'ok', category: null, result };
+        } catch (e) {
+            const durationMs = Math.round(performance.now() - start);
+            const category = String(e?.category || e?.original?.category || '').toLowerCase();
+            const normalizedCategory = ['auth', 'network', 'rls', 'sql'].includes(category) ? category : 'unknown';
+            console.warn(`[ACTIVITY][${saveAttemptId}] ❌ Supabase save failed category=${normalizedCategory} in ${durationMs}ms`, e);
+            return {
+                status: 'error',
+                category: normalizedCategory,
+                toastMessage: mapSaveFailureToToast(normalizedCategory),
+                error: e,
+            };
+        }
+    }
+
+    function showActivityToast(message, level = 'ok') {
+        const toast = document.getElementById('activityToast');
+        if (!toast) return;
+
+        if (toastTimer) clearTimeout(toastTimer);
+        toast.className = 'activity-toast';
+        if (level === 'warn') toast.classList.add('activity-toast--warn');
+        if (level === 'error') toast.classList.add('activity-toast--error');
+        toast.textContent = String(message || 'Action effectuée.');
+        toast.classList.add('activity-toast--show');
+        console.log('[ACTIVITY] toast displayed');
+
+        toastTimer = setTimeout(() => {
+            toast.classList.remove('activity-toast--show');
+        }, 2600);
+    }
+
+    function filterActivities(search) {
+        activitySearchTerm = String(search || '').trim().toLowerCase();
+        renderActivitiesGrid();
+    }
+
+    function clearActivitiesFilter() {
+        activitySearchTerm = '';
+        const input = document.getElementById('paramSearchInput');
+        if (input) input.value = '';
+        renderActivitiesGrid();
+    }
+
+    // V3.3 — Chargement paramètres activités depuis support_settings + fallback historique
+    async function loadActivitiesFromSupabase() {
+        const localActs = (() => {
+            try { return JSON.parse(localStorage.getItem('demat_activities') || '[]'); }
+            catch (_e) { return []; }
+        })();
+
+        let fromSettings = [];
+        let fromHistory = [];
+
+        if (window.SupportStore && window.supabaseClient) {
+            try {
+                const payload = await window.SupportStore.loadSetting("PARAM_ACTIVITIES", { site: "VLG" });
+                fromSettings = Array.isArray(payload?.activities)
+                    ? payload.activities
+                    : (Array.isArray(payload) ? payload : []);
+            } catch (e) {
+                console.warn("⚠️ V3.3 Chargement support_settings échoué (fallback local/historique):", e.message);
             }
 
-            // 2) Fallback de migration : scanner les dernières fiches jour
-            const { data: rows, error } = await window.supabaseClient
-                .from("support_journee")
-                .select("jour, payload")
-                .eq("site", "VLG")
-                .order("jour", { ascending: false })
-                .limit(90);
+            try {
+                const { data: rows, error } = await window.supabaseClient
+                    .from("support_journee")
+                    .select("jour, payload")
+                    .eq("site", "VLG")
+                    .order("jour", { ascending: false })
+                    .limit(120);
+                if (error) throw error;
+                fromHistory = extractHistoricalActivitiesFromRows(rows || []);
+            } catch (e) {
+                console.warn("⚠️ V3.3 Lecture historique support_journee échouée:", e.message);
+            }
+        }
 
-            if (error) throw error;
-            if (!rows?.length) return;
+        const merged = mergeActivities([
+            ...DEFAULT_ACTIVITIES,
+            ...localActs,
+            ...fromSettings,
+            ...fromHistory,
+        ]);
 
-            const rowWithParams = rows.find(r => Array.isArray(r?.payload?.__PARAM_ACTIVITIES));
-            if (!rowWithParams) return;
+        activities = merged.activities;
+        localStorage.setItem('demat_activities', JSON.stringify(activities));
 
-            activities = rowWithParams.payload.__PARAM_ACTIVITIES;
-            localStorage.setItem('demat_activities', JSON.stringify(activities));
-            console.log("☁️ Param activités chargés depuis Supabase (jour:", rowWithParams.jour + ")");
-        } catch (e) {
-            console.warn("⚠️ Chargement Supabase des paramètres activités échoué:", e.message);
+        console.log(`[ACTIVITY] loaded ${fromSettings.length} activities`);
+        console.log(`[ACTIVITY] merged historical activities: ${fromHistory.length}`);
+        console.log(`[ACTIVITY] attendance types applied: ${activities.length}`);
+        console.log('[ACTIVITY] UI improved V3.4.1');
+
+        if (window.SupportStore && fromHistory.length > 0) {
+            try {
+                await window.SupportStore.saveSetting("PARAM_ACTIVITIES", { activities }, { site: "VLG" });
+                console.log("☁️ V3.3 Référentiel fusionné repersisté dans support_settings");
+            } catch (e) {
+                console.warn("⚠️ V3.3 Persistance post-fusion ignorée:", e.message);
+            }
         }
     }
 
@@ -806,6 +1141,8 @@ window.SupportModule = (function() {
         
         // Actions Paramètres
         addActivity, deleteActivity, updateActivityColor,
+        startEditActivity, cancelEditActivity, saveEditedActivity,
+        renderActivitiesGrid, filterActivities, clearActivitiesFilter,
         
         // Actions Historique
         renderHistory, sortHistory,
