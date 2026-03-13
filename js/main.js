@@ -1,10 +1,10 @@
-// js/main.js — DEMAT-BT v11.5.5 — 19/02/2026
+// js/main.js — DEMAT-BT v11.6 — 19/02/2026
 // Point d'entrée principal
 // FIX v11.2.0: renderAll alias, weather init, refreshAllViews
 // FIX v11.4.0: Modal event listeners + loadBadgeRules() + loadBadgeRules avant cache
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("🚀 DEMAT-BT v11.5.5 démarré.");
+    console.log("🚀 DEMAT-BT v11.6 démarré.");
 
     // ============================================================
     // HELPERS UI attendus par pdf-extractor.js
@@ -124,6 +124,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.switchView = function(viewName) {
         console.log("Navigation vers :", viewName);
+
+        if (viewName === 'support' && window.__SUPPORT_AUTH_CONNECTED !== true) {
+            console.warn("[MAIN] Accès support bloqué: utilisateur non connecté.");
+            alert("Veuillez vous connecter pour accéder au Support Journée.");
+            const authBtn = document.getElementById('btnAuth');
+            if (authBtn && authBtn.dataset.state === 'in') {
+                authBtn.click();
+            }
+            return;
+        }
 
         // Cacher toutes les vues
         document.querySelectorAll('.view').forEach(el => {

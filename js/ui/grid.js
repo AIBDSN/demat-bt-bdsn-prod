@@ -1,4 +1,4 @@
-/* js/ui/grid.js — DEMAT-BT v11.5.5 — 09/03/2026
+/* js/ui/grid.js — DEMAT-BT v11.6 — 09/03/2026
    Vue Référent : grandes vignettes, petites vignettes, liste
 */
 

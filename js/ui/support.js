@@ -23,6 +23,12 @@ window.SupportModule = (function() {
     let toastTimer = null;
     let sortKey = 'date';
     let sortDir = -1; // -1 = décroissant (plus récent en haut)
+    let lastSupportMeta = null;
+    let supportDatePickerInstance = null;
+    let supportDaysWithData = new Set();
+    let currentDayUpdatedAt = null;
+    let currentDayLockToken = null;
+    let lockRenewTimer = null;
 
     // Liste des activités par défaut (Fidèle au fichier Excel)
     const DEFAULT_ACTIVITIES = [
@@ -78,6 +84,194 @@ window.SupportModule = (function() {
         const week1 = new Date(date.getFullYear(), 0, 4);
         return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
     };
+
+    function formatLastUpdateLabel(meta) {
+        if (!meta) return "Dernière modification : —";
+        const rawBy = String(meta.lastModifiedByEmail || meta.createdBy || meta.updatedBy || '').trim();
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawBy);
+        const by = isUuid ? '' : rawBy;
+        const atRaw = meta.lastModifiedAt || meta.updatedAt || null;
+        let at = '';
+        if (atRaw) {
+            const dt = new Date(atRaw);
+            if (!Number.isNaN(dt.getTime())) at = dt.toLocaleString('fr-FR');
+        }
+        if (by && at) return `Dernière modification : ${by} le ${at}`;
+        if (by) return `Dernière modification : ${by}`;
+        if (at) return `Dernière modification : utilisateur non identifié le ${at}`;
+        return "Dernière modification : —";
+    }
+
+    function renderLastUpdate(meta = null) {
+        const el = document.getElementById('supportLastUpdate');
+        if (!el) return;
+        el.textContent = formatLastUpdateLabel(meta);
+    }
+
+    function formatLockStatusLabel(status, lockObj = null) {
+        const email = String(lockObj?.ownerEmail || lockObj?.ownerId || '').trim();
+        const expires = lockObj?.expiresAt ? new Date(lockObj.expiresAt) : null;
+        const expLabel = (expires && !Number.isNaN(expires.getTime())) ? expires.toLocaleTimeString('fr-FR') : null;
+
+        if (status === 'acquired') {
+            return expLabel ? `Statut édition : verrou actif (vous) jusqu'à ${expLabel}` : "Statut édition : verrou actif (vous)";
+        }
+        if (status === 'busy') {
+            const who = email || 'un autre utilisateur';
+            return expLabel ? `Statut édition : en cours par ${who} (jusqu'à ${expLabel})` : `Statut édition : en cours par ${who}`;
+        }
+        if (status === 'locked') {
+            return "Statut édition : fiche verrouillée (lecture seule)";
+        }
+        return "Statut édition : —";
+    }
+
+    function renderLockStatus(status = null, lockObj = null) {
+        const el = document.getElementById('supportLockStatus');
+        if (!el) return;
+        el.textContent = formatLockStatusLabel(status, lockObj);
+    }
+
+    function hasMeaningfulDayData(payload) {
+        if (!payload || typeof payload !== 'object') return false;
+        if (String(payload.__GLOBAL_OBS || '').trim()) return true;
+
+        return Object.keys(payload).some((agentName) => {
+            if (agentName === '__GLOBAL_OBS' || agentName === '__PARAM_ACTIVITIES' || agentName === '_meta') return false;
+            const d = payload[agentName];
+            if (!d || typeof d !== 'object') return false;
+            return Boolean(
+                String(d.act || '').trim() ||
+                String(d.obs || '').trim() ||
+                d.briefA === 'OUI' ||
+                d.briefD === 'OUI' ||
+                d.debriefA === 'OUI' ||
+                d.debriefD === 'OUI' ||
+                d.Grv === 'OUI'
+            );
+        });
+    }
+
+    function dateKeyFromDate(dateObj) {
+        if (!(dateObj instanceof Date)) return '';
+        return dateObj.toLocaleDateString('fr-CA');
+    }
+
+    function markSupportCalendarDay(dayElem) {
+        if (!dayElem || !dayElem.dateObj) return;
+        const key = dateKeyFromDate(dayElem.dateObj);
+        dayElem.classList.toggle('support-has-data', supportDaysWithData.has(key));
+    }
+
+    function redrawSupportDatePickerMarkers() {
+        if (!supportDatePickerInstance) return;
+        supportDatePickerInstance.calendarContainer?.querySelectorAll('.flatpickr-day')?.forEach(markSupportCalendarDay);
+    }
+
+    async function refreshSupportDaysWithData() {
+        const nextSet = new Set();
+
+        for (let i = 0; i < localStorage.length; i += 1) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith('demat_day_')) continue;
+            const dayKey = key.replace('demat_day_', '');
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) continue;
+            try {
+                const payload = JSON.parse(localStorage.getItem(key) || '{}');
+                if (hasMeaningfulDayData(payload)) nextSet.add(dayKey);
+            } catch (_e) {}
+        }
+
+        if (window.SupportStore && window.supabaseClient) {
+            try {
+                const { data: authData } = await window.supabaseClient.auth.getUser();
+                if (authData?.user) {
+                    const { data: rows, error } = await window.supabaseClient
+                        .from('support_journee')
+                        .select('jour, payload')
+                        .eq('site', 'VLG')
+                        .order('jour', { ascending: false })
+                        .limit(400);
+                    if (error) throw error;
+
+                    (rows || []).forEach((row) => {
+                        const dayKey = String(row?.jour || '');
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return;
+                        if (hasMeaningfulDayData(row?.payload || {})) nextSet.add(dayKey);
+                    });
+                }
+            } catch (e) {
+                console.warn('[SUPPORT] refreshSupportDaysWithData Supabase ignoré:', e?.message || e);
+            }
+        }
+
+        supportDaysWithData = nextSet;
+        redrawSupportDatePickerMarkers();
+    }
+
+    async function ensureEditLockForCurrentDay({ silent = true } = {}) {
+        const key = formatDateKey(currentDate);
+        if (!window.SupportStore?.acquireDayLock || !window.supabaseClient) {
+            renderLockStatus(null, null);
+            return null;
+        }
+
+        try {
+            const { data: authData } = await window.supabaseClient.auth.getUser();
+            if (!authData?.user) {
+                renderLockStatus(null, null);
+                return null;
+            }
+
+            const lockResult = await window.SupportStore.acquireDayLock({
+                jour: key,
+                site: "VLG",
+                ttlSeconds: 10 * 60,
+                token: currentDayLockToken || null,
+            });
+
+            if (lockResult?.status === 'acquired') {
+                currentDayLockToken = lockResult?.lock?.token || currentDayLockToken || null;
+                if (lockResult?.updatedAt) currentDayUpdatedAt = lockResult.updatedAt;
+                renderLockStatus('acquired', lockResult?.lock || null);
+            } else if (lockResult?.status === 'busy') {
+                renderLockStatus('busy', lockResult?.lock || null);
+            } else if (lockResult?.status === 'locked') {
+                renderLockStatus('locked', null);
+            } else {
+                renderLockStatus(null, null);
+            }
+
+            return lockResult;
+        } catch (e) {
+            if (!silent) console.warn('[SUPPORT] lock check failed:', e?.message || e);
+            renderLockStatus(null, null);
+            return null;
+        }
+    }
+
+    function initSupportDatePicker() {
+        const elPicker = document.getElementById('supportDatePicker');
+        if (!elPicker || supportDatePickerInstance || !window.flatpickr) return;
+
+        supportDatePickerInstance = window.flatpickr(elPicker, {
+            dateFormat: 'Y-m-d',
+            altInput: true,
+            altFormat: 'd/m/Y',
+            defaultDate: formatDateKey(currentDate),
+            locale: window.flatpickr?.l10ns?.fr || 'default',
+            allowInput: false,
+            onChange: (selectedDates) => {
+                if (!selectedDates || selectedDates.length === 0) return;
+                const nextKey = dateKeyFromDate(selectedDates[0]);
+                if (nextKey) goToDate(nextKey);
+            },
+            onDayCreate: (_dObj, _dStr, _fp, dayElem) => markSupportCalendarDay(dayElem),
+            onMonthChange: () => redrawSupportDatePickerMarkers(),
+            onYearChange: () => redrawSupportDatePickerMarkers(),
+            onOpen: () => redrawSupportDatePickerMarkers(),
+        });
+    }
 
     // Détermine si une couleur de fond est claire ou foncée pour adapter le texte (noir/blanc)
     const isLight = hex => {
@@ -237,6 +431,11 @@ window.SupportModule = (function() {
         if (window.supabaseClient?.auth?.onAuthStateChange) {
             window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+                    if (window.SupportStore?.backfillLegacyMeta) {
+                        window.SupportStore.backfillLegacyMeta({ site: "VLG", limit: 365 })
+                            .then((r) => console.log(`[SUPPORT] legacy meta backfill: scanned=${r?.scanned || 0}, patched=${r?.patched || 0}`))
+                            .catch((e) => console.warn("[SUPPORT] legacy meta backfill ignored:", e?.message || e));
+                    }
                     await loadActivitiesFromSupabase();
                     renderParams();
                     renderTable();
@@ -249,10 +448,29 @@ window.SupportModule = (function() {
         history = savedHist ? JSON.parse(savedHist) : [];
 
         // 3. Premier Rendu
+        initSupportDatePicker();
         updateDateDisplay();
         loadAndRenderTable();
         renderParams();
         renderStats(); 
+        renderLockStatus(null, null);
+
+        refreshSupportDaysWithData().catch((e) => {
+            console.warn('[SUPPORT] impossible de marquer le calendrier:', e?.message || e);
+        });
+
+        if (lockRenewTimer) clearInterval(lockRenewTimer);
+        lockRenewTimer = setInterval(() => {
+            const briefPanel = document.getElementById('tabBrief');
+            if (!briefPanel?.classList?.contains('active')) return;
+            ensureEditLockForCurrentDay({ silent: true }).catch(() => {});
+        }, 120000);
+
+        if (window.SupportStore?.backfillLegacyMeta) {
+            window.SupportStore.backfillLegacyMeta({ site: "VLG", limit: 365 })
+                .then((r) => console.log(`[SUPPORT] startup legacy meta backfill: scanned=${r?.scanned || 0}, patched=${r?.patched || 0}`))
+                .catch((e) => console.warn("[SUPPORT] startup legacy meta backfill ignored:", e?.message || e));
+        }
         
         // 4. Listeners globaux (Délégation d'événements pour performance)
         const tbody = document.getElementById('briefTableBody');
@@ -278,6 +496,16 @@ window.SupportModule = (function() {
         if(tabId === 'tabHistory') {
             // Recharger depuis Supabase à chaque ouverture de l'onglet historique
             loadHistoryFromSupabase().then(() => renderHistory());
+            return;
+        }
+
+        if (tabId === 'tabBrief') {
+            loadAndRenderTable();
+            return;
+        }
+
+        if (tabId === 'tabParam') {
+            renderParams();
         }
     }
 
@@ -298,6 +526,9 @@ window.SupportModule = (function() {
         // Input date picker
         const elPicker = document.getElementById('supportDatePicker');
         if(elPicker) elPicker.value = formatDateKey(currentDate);
+        if (supportDatePickerInstance) {
+            supportDatePickerInstance.setDate(formatDateKey(currentDate), false);
+        }
     }
 
     function changeDay(delta) {
@@ -326,11 +557,23 @@ window.SupportModule = (function() {
 
     async function loadAndRenderTable() {
         const key = formatDateKey(currentDate);
+        lastSupportMeta = null;
+        currentDayUpdatedAt = null;
+        currentDayLockToken = null;
         
         // Tenter de charger depuis Supabase (si connecté)
         if(window.SupportStore && window.supabaseClient) {
             try {
                 const row = await window.SupportStore.loadSupport({ jour: key });
+                if (row?.payload?._meta && typeof row.payload._meta === 'object') {
+                    lastSupportMeta = row.payload._meta;
+                } else if (row?.updated_at || row?.updated_by) {
+                    lastSupportMeta = {
+                        updatedAt: row.updated_at || null,
+                        updatedBy: row.updated_by || null,
+                    };
+                }
+                if (row?.updated_at) currentDayUpdatedAt = row.updated_at;
                 if(row?.payload && Object.keys(row.payload).length > 1) {
                     // Supabase a des données → on met à jour le localStorage local aussi
                     localStorage.setItem('demat_day_' + key, JSON.stringify(row.payload));
@@ -340,6 +583,15 @@ window.SupportModule = (function() {
                 console.warn("⚠️ Chargement Supabase échoué, fallback localStorage :", e.message);
             }
         }
+
+        if (!lastSupportMeta) {
+            try {
+                const savedDay = JSON.parse(localStorage.getItem('demat_day_' + key) || '{}');
+                if (savedDay?._meta) lastSupportMeta = savedDay._meta;
+            } catch (_e) {}
+        }
+        renderLastUpdate(lastSupportMeta);
+        await ensureEditLockForCurrentDay({ silent: true });
         
         renderTable();
     }
@@ -354,6 +606,9 @@ window.SupportModule = (function() {
         
         // Utilisation de la liste globale window.TECHNICIANS (chargée par technicians.js)
         const techs = window.TECHNICIANS || [];
+        if (!Array.isArray(techs) || techs.length === 0) {
+            console.warn('[SUPPORT] renderTable: aucun technicien chargé (window.TECHNICIANS vide).');
+        }
 
         let cptPres = 0, cptAbs = 0, cptGrv = 0;
 
@@ -433,6 +688,8 @@ window.SupportModule = (function() {
             `;
             tbody.appendChild(tr);
         });
+
+        console.log(`[SUPPORT] renderTable: ${techs.length} techniciens, ${tbody.querySelectorAll('tr').length} lignes rendues.`);
 
         // Charger l'observation globale
         const obsGlobal = document.getElementById('obsGlobal');
@@ -540,11 +797,26 @@ window.SupportModule = (function() {
 
         const key = formatDateKey(currentDate);
         localStorage.setItem('demat_day_' + key, JSON.stringify(dayData));
+        if (hasMeaningfulDayData(dayData)) supportDaysWithData.add(key);
+        else supportDaysWithData.delete(key);
+        redrawSupportDatePickerMarkers();
         
         // FIX v11.1 : Synchronisation Supabase (si connecté)
         if(window.SupportStore && window.supabaseClient) {
-            window.SupportStore.saveSupport(dayData, { jour: key })
-                .then(() => {
+            window.SupportStore.saveSupport(dayData, {
+                jour: key,
+                site: "VLG",
+                expectedUpdatedAt: currentDayUpdatedAt,
+                lockToken: currentDayLockToken,
+            })
+                .then((savedRow) => {
+                    const meta = savedRow?.payload?._meta || dayData?._meta || null;
+                    lastSupportMeta = meta;
+                    renderLastUpdate(lastSupportMeta);
+                    if (savedRow?.updated_at) currentDayUpdatedAt = savedRow.updated_at;
+                    const lockObj = savedRow?.payload?._lock || null;
+                    if (lockObj?.token) currentDayLockToken = lockObj.token;
+                    renderLockStatus('acquired', lockObj);
                     // Feedback visuel discret
                     const btn = document.querySelector('button[onclick*="saveDay"], button[onclick*="SupportModule.saveDay"]');
                     if(btn) {
@@ -556,6 +828,17 @@ window.SupportModule = (function() {
                 })
                 .catch(e => {
                     console.error("❌ Erreur sauvegarde Supabase :", e.message);
+                    const category = String(e?.category || '').toLowerCase();
+                    if (category === 'conflict') {
+                        alert("⚠️ Conflit détecté : cette journée a été modifiée ailleurs.\nRecharge de la journée en cours.");
+                        loadAndRenderTable();
+                        return;
+                    }
+                    if (category === 'lock') {
+                        alert("⛔ Sauvegarde refusée : un autre utilisateur édite cette journée.");
+                        ensureEditLockForCurrentDay({ silent: false });
+                        return;
+                    }
                     alert("⚠️ Sauvegarde locale OK, mais Supabase a échoué :\n" + e.message);
                 });
         }
@@ -591,7 +874,10 @@ window.SupportModule = (function() {
 
     function clearDay() {
         if(confirm("Voulez-vous vraiment vider toutes les saisies de ce jour ?")) {
-            localStorage.removeItem('demat_day_' + formatDateKey(currentDate));
+            const dayKey = formatDateKey(currentDate);
+            localStorage.removeItem('demat_day_' + dayKey);
+            supportDaysWithData.delete(dayKey);
+            redrawSupportDatePickerMarkers();
             renderTable();
         }
     }
@@ -708,7 +994,10 @@ window.SupportModule = (function() {
     }
 
     function deleteActivity(index) {
-        if (!activities[index]) return;
+        if (!activities[index]) {
+            console.warn(`[ACTIVITY] delete ignored: invalid index=${index}, size=${activities.length}`);
+            return;
+        }
         const actName = activityDisplayLabel(activities[index]);
         if(confirm(`Supprimer définitivement l'activité "${actName}" ?`)) {
             activities.splice(index, 1);
@@ -776,11 +1065,11 @@ window.SupportModule = (function() {
         const saveAttemptId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         console.log(`[ACTIVITY][${saveAttemptId}] 💾 local save done (${activities.length} activités)`);
 
+        renderParams();
+        renderTable();
+
         // Synchronisation cloud best-effort (sans bloquer l'UI)
         const syncResult = await saveActivitiesToSupabase({ saveAttemptId });
-
-        renderParams(); // Mettre à jour la grille
-        renderTable();  // Mettre à jour le tableau principal (couleurs)
 
         if (successMessage) {
             if (syncResult.status === 'ok') {
@@ -861,7 +1150,9 @@ window.SupportModule = (function() {
         renderActivitiesGrid();
     }
 
-    // V3.3 — Chargement paramètres activités depuis support_settings + fallback historique
+    // V3.4 — Chargement paramètres activités:
+    // - support_settings.PARAM_ACTIVITIES = source de vérité
+    // - fallback historique uniquement au bootstrap (si aucun paramétrage en base)
     async function loadActivitiesFromSupabase() {
         const localActs = (() => {
             try { return JSON.parse(localStorage.getItem('demat_activities') || '[]'); }
@@ -870,6 +1161,7 @@ window.SupportModule = (function() {
 
         let fromSettings = [];
         let fromHistory = [];
+        let settingsLoaded = false;
 
         if (window.SupportStore && window.supabaseClient) {
             try {
@@ -877,10 +1169,16 @@ window.SupportModule = (function() {
                 fromSettings = Array.isArray(payload?.activities)
                     ? payload.activities
                     : (Array.isArray(payload) ? payload : []);
+                settingsLoaded = true;
             } catch (e) {
                 console.warn("⚠️ V3.3 Chargement support_settings échoué (fallback local/historique):", e.message);
             }
+        }
 
+        let merged;
+        if (fromSettings.length > 0) {
+            merged = mergeActivities(fromSettings);
+        } else if (settingsLoaded) {
             try {
                 const { data: rows, error } = await window.supabaseClient
                     .from("support_journee")
@@ -893,14 +1191,15 @@ window.SupportModule = (function() {
             } catch (e) {
                 console.warn("⚠️ V3.3 Lecture historique support_journee échouée:", e.message);
             }
-        }
 
-        const merged = mergeActivities([
-            ...DEFAULT_ACTIVITIES,
-            ...localActs,
-            ...fromSettings,
-            ...fromHistory,
-        ]);
+            merged = mergeActivities([
+                ...DEFAULT_ACTIVITIES,
+                ...localActs,
+                ...fromHistory,
+            ]);
+        } else {
+            merged = mergeActivities(localActs.length > 0 ? localActs : DEFAULT_ACTIVITIES);
+        }
 
         activities = merged.activities;
         localStorage.setItem('demat_activities', JSON.stringify(activities));
@@ -910,7 +1209,7 @@ window.SupportModule = (function() {
         console.log(`[ACTIVITY] attendance types applied: ${activities.length}`);
         console.log('[ACTIVITY] UI improved V3.4.1');
 
-        if (window.SupportStore && fromHistory.length > 0) {
+        if (window.SupportStore && settingsLoaded && fromSettings.length === 0 && fromHistory.length > 0) {
             try {
                 await window.SupportStore.saveSetting("PARAM_ACTIVITIES", { activities }, { site: "VLG" });
                 console.log("☁️ V3.3 Référentiel fusionné repersisté dans support_settings");
