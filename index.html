@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>DEMAT-BT v11.6 — Référent & Brief</title>
+  <title>DEMAT-BT v12.0 — Référent & Brief</title>
   <link rel="icon" type="image/png" href="./favicon.png" />
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./css/components.css" />
@@ -13,10 +13,10 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="brand__logo" src="./assets/grdf-logo.png" alt="GRDF" />
+      <img class="brand__logo" src="./assets/logo-topbar.png" alt="Logo DEMAT-BT" />
       <div class="brand__text">
         <div class="brand__title">DEMAT-BT <span style="color:#ff1100;">PROD</span></div>
-        <div class="brand__sub">Dématérialisation BT — Référent d'équipe <strong style="color:#17499c;">v11.6</strong></div>
+        <div class="brand__sub">Dématérialisation BT — Référent d'équipe <strong style="color:#17499c;">v12.0</strong></div>
       </div>
     </div>
 
@@ -37,6 +37,7 @@
       <!-- Auth Supabase -->
 <div class="auth" style="display:flex; gap:8px; align-items:center; margin-left:12px;">
   <button id="btnAuth" class="btn btn--secondary" type="button">Se connecter</button>
+  <span id="supabaseStatusDot" style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block;" title="Supabase déconnecté"></span>
   <span id="authStatus" class="hint" style="margin:0;">Non connecté</span>
 </div>
     </div>
@@ -44,81 +45,90 @@
 
   <main class="layout">
     <aside class="sidebar card">
-      <div class="sidebar-import-block">
-        <label class="btn btn--secondary" style="width:100%; justify-content:center;">
-          <span>📁</span> Importer PDF du jour
-          <input id="pdfFile" type="file" accept="application/pdf" hidden />
-        </label>
-        <button id="btnExtract" class="btn" style="width:100%; justify-content:center;">
-          <span>⚡</span> Extraire
+      <div class="sidebar-section sidebar-section--flow">
+        <div class="card__title">Préparer la journée</div>
+        <div class="sidebar-flow">
+          <label class="sidebar-step sidebar-step--secondary">
+            <span class="sidebar-step__num">1</span>
+            <span class="sidebar-step__body">
+              <span class="sidebar-step__title"><span>📁</span> Importer le PDF du jour</span>
+              <span class="sidebar-step__desc">Charge le PDF brut reçu pour la journée.</span>
+            </span>
+            <input id="pdfFile" type="file" accept="application/pdf" hidden />
+          </label>
+          <button id="btnExtract" class="sidebar-step sidebar-step--primary">
+            <span class="sidebar-step__num">2</span>
+            <span class="sidebar-step__body">
+              <span class="sidebar-step__title"><span>⚡</span> Extraire les BT</span>
+              <span class="sidebar-step__desc">Analyse le PDF et prépare les données terrain.</span>
+            </span>
+          </button>
+        </div>
+        <div class="hint sidebar-flow__hint">Commence par importer le PDF, puis lance l'extraction.</div>
+      </div>
+
+      <div class="sidebar-section sidebar-section--support">
+        <button id="btnSupportView" class="btn btn--disabled sidebar-support-btn" disabled onclick="switchView('support')">
+           <span>📊</span> Support Journée
         </button>
-      </div>
-      <div class="divider" style="margin: 8px 0;"></div>
-      <div class="card__title">Contrôle</div>
-
-      <div class="field">
-        <button id="btnSupportView" class="btn btn--disabled" disabled style="width:100%; justify-content:center; background:white; color:var(--primary); border: 2px solid var(--primary); font-weight:800;" onclick="switchView('support')">
-           📊 Support Journée
-        </button>
+        <div class="hint sidebar-support-hint">Accède au pilotage quotidien après connexion.</div>
       </div>
 
-      <div class="divider"></div>
-
-      <div class="control-badges">
-        <div class="control-badge" id="zonesBadge">
-          <div class="control-badge__icon">📍</div>
-          <div class="control-badge__label">Zones</div>
-          <div class="control-badge__status" id="zonesStatus">Chargement…</div>
+      <div class="sidebar-section">
+        <div class="card__title card__title--compact">État</div>
+        <div class="control-badges control-badges--compact">
+          <div class="control-badge control-badge--compact" id="zonesBadge">
+            <div class="control-badge__icon">📍</div>
+            <div class="control-badge__main">
+              <div class="control-badge__label">Zones</div>
+              <div class="control-badge__status" id="zonesStatus">Chargement…</div>
+            </div>
+          </div>
+          
+          <div class="control-badge control-badge--compact" id="pdfBadge">
+            <div class="control-badge__icon">📄</div>
+            <div class="control-badge__main">
+              <div class="control-badge__label">PDF</div>
+              <div class="control-badge__status" id="pdfStatus">Aucun PDF</div>
+            </div>
+          </div>
         </div>
-        
-        <div class="control-badge" id="pdfBadge">
-          <div class="control-badge__icon">📄</div>
-          <div class="control-badge__label">PDF</div>
-          <div class="control-badge__status" id="pdfStatus">Aucun PDF</div>
+        <div class="progress-badge progress-badge--compact" id="progressBadge">
+          <div class="progress-badge__header">
+            <div class="progress-badge__icon">⚡</div>
+            <div class="progress-badge__text" id="progMsg">Prêt.</div>
+          </div>
+          <div class="progress"><div id="progBar"></div></div>
         </div>
-      </div>
-
-      <div class="progress-badge" id="progressBadge">
-        <div class="progress-badge__header">
-          <div class="progress-badge__icon">⚡</div>
-          <div class="progress-badge__text" id="progMsg">Prêt.</div>
-        </div>
-        <div class="progress"><div id="progBar"></div></div>
-      </div>
-
-      <div class="field" style="margin-top: 12px;">
-        <button id="btnClearCache" class="btn btn--secondary" style="width: 100%; font-size: 12px;">
-          <span>🗑️</span> Vider le cache
-        </button>
-        <div class="hint" style="margin-top: 6px; font-size: 11px;">
-          Supprime les données sauvegardées localement
+        <div class="field field--tight">
+          <button id="btnClearCache" class="btn btn--secondary sidebar-cache-btn">
+            <span>🗑️</span> Vider le cache
+          </button>
+          <div class="hint sidebar-cache-hint">Supprime les données sauvegardées localement.</div>
         </div>
       </div>
 
-      <div class="divider"></div>
-
-      <div class="field">
+      <div class="sidebar-section">
+        <div class="card__title card__title--compact">Filtres</div>
+        <div class="field field--tight">
         <div class="label">Filtre</div>
         <input id="searchInput" class="input" placeholder="Rechercher (BT, client, adresse, objet…)" />
       </div>
 
-      <div class="field">
+      <div class="field field--tight">
         <div class="label">Type de docs</div>
         <div class="chips" id="typeChips">
           </div>
       </div>
 
-      <div class="divider"></div>
-
-      <div class="field">
+      <div class="field field--tight">
         <div class="label">Technicien</div>
         <select id="techSelect" class="select">
           <option value="">— Tous —</option>
         </select>
         <div class="hint">Pour le Brief, sélectionne un technicien → ses BT s'affichent.</div>
       </div>
-
-      <div class="divider"></div>
+      </div>
     </aside>
 
     <section class="content">
@@ -233,6 +243,18 @@
                     <div class="kpi-badge"><div class="kpi-dot" style="background:#22c55e"></div> Présents: <span id="kpiPres">0</span></div>
                     <div class="kpi-badge"><div class="kpi-dot" style="background:#ef4444"></div> Absents: <span id="kpiAbs">0</span></div>
                     <div class="kpi-badge"><div class="kpi-dot" style="background:#f59e0b"></div> Grève: <span id="kpiGreve">0</span></div>
+                </div>
+            </div>
+
+            <div id="supportWeatherPanel" class="support-weather-panel screen-only">
+                <div class="support-weather-panel__header">
+                    <div>
+                        <div class="support-weather-panel__title">Prévisions météo terrain</div>
+                        <div class="support-weather-panel__subtitle" id="supportWeatherSummary">Chargement des prévisions...</div>
+                    </div>
+                </div>
+                <div id="supportWeatherGrid" class="support-weather-grid">
+                    <div class="support-weather-card support-weather-card--loading">Chargement...</div>
                 </div>
             </div>
 

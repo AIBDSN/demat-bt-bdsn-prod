@@ -29,6 +29,7 @@ window.SupportModule = (function() {
     let currentDayUpdatedAt = null;
     let currentDayLockToken = null;
     let lockRenewTimer = null;
+    let supportSaveQueue = Promise.resolve();
 
     // Liste des activités par défaut (Fidèle au fichier Excel)
     const DEFAULT_ACTIVITIES = [
@@ -114,11 +115,15 @@ window.SupportModule = (function() {
         const expLabel = (expires && !Number.isNaN(expires.getTime())) ? expires.toLocaleTimeString('fr-FR') : null;
 
         if (status === 'acquired') {
-            return expLabel ? `Statut édition : verrou actif (vous) jusqu'à ${expLabel}` : "Statut édition : verrou actif (vous)";
+            return expLabel
+                ? `Statut édition : verrou actif (vous) jusqu'à ${expLabel}`
+                : "Statut édition : verrou actif (vous)";
         }
         if (status === 'busy') {
             const who = email || 'un autre utilisateur';
-            return expLabel ? `Statut édition : en cours par ${who} (jusqu'à ${expLabel})` : `Statut édition : en cours par ${who}`;
+            return expLabel
+                ? `Statut édition : en cours par ${who} (jusqu'à ${expLabel})`
+                : `Statut édition : en cours par ${who}`;
         }
         if (status === 'locked') {
             return "Statut édition : fiche verrouillée (lecture seule)";
@@ -132,8 +137,110 @@ window.SupportModule = (function() {
         el.textContent = formatLockStatusLabel(status, lockObj);
     }
 
+    function formatSupportWeatherDateLabel(dateObj) {
+        if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return '';
+        return dateObj.toLocaleDateString('fr-FR', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+        });
+    }
+
+    function renderSupportWeatherState(message, isError = false) {
+        const summaryEl = document.getElementById('supportWeatherSummary');
+        const gridEl = document.getElementById('supportWeatherGrid');
+        if (summaryEl) summaryEl.textContent = String(message || '');
+        if (gridEl) {
+            const safeMessage = escapeHtml(message || (isError ? 'Prévisions indisponibles.' : 'Chargement...'));
+            gridEl.innerHTML = `<div class="support-weather-card support-weather-card--loading">${safeMessage}</div>`;
+        }
+    }
+
+    async function renderSupportWeatherForecast() {
+        const summaryEl = document.getElementById('supportWeatherSummary');
+        const gridEl = document.getElementById('supportWeatherGrid');
+        if (!summaryEl || !gridEl) return;
+
+        const screenDate = new Date(currentDate.getTime());
+        const dateLabel = formatSupportWeatherDateLabel(screenDate);
+        renderSupportWeatherState(`Prévisions terrain pour ${dateLabel}...`);
+
+        if (!window.WeatherModule?.getForecastForDate) {
+            renderSupportWeatherState("Prévisions météo indisponibles.", true);
+            return;
+        }
+
+        try {
+            const result = await window.WeatherModule.getForecastForDate(screenDate);
+            if (formatDateKey(screenDate) !== formatDateKey(currentDate)) return;
+
+            const availableForecasts = (result?.communes || []).filter(item => item?.forecast);
+            if (availableForecasts.length === 0) {
+                renderSupportWeatherState(`Aucune prévision disponible pour ${dateLabel}.`, true);
+                return;
+            }
+
+            const riskCount = availableForecasts.filter(item => item.forecast?.rsf?.level === 'risk').length;
+            const warnCount = availableForecasts.filter(item => item.forecast?.rsf?.level === 'warn').length;
+            if (riskCount > 0) summaryEl.textContent = `${dateLabel} : vigilance humidité forte sur ${riskCount} commune(s).`;
+            else if (warnCount > 0) summaryEl.textContent = `${dateLabel} : humidité possible sur ${warnCount} commune(s).`;
+            else summaryEl.textContent = `${dateLabel} : conditions plutôt favorables pour la RSF.`;
+
+            gridEl.innerHTML = (result.communes || []).map((item) => {
+                const city = escapeHtml(window.WeatherModule.prettyName(item.name));
+                const forecast = item.forecast;
+                if (!forecast) {
+                    return `
+                        <div class="support-weather-card">
+                            <div class="support-weather-card__top">
+                                <div class="support-weather-card__city">${city}</div>
+                                <div class="support-weather-card__icon">🌡️</div>
+                            </div>
+                            <div class="support-weather-card__temp">—</div>
+                            <div class="support-weather-card__metrics">
+                                <div class="support-weather-card__metric"><span>Prévision</span><strong>Indisponible</strong></div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const badge = forecast.rsf || { level: 'warn', label: 'RSF a surveiller', summary: 'Prevision incomplete' };
+                const badgeClass = badge.level === 'risk'
+                    ? 'support-weather-card__badge--risk'
+                    : (badge.level === 'warn' ? 'support-weather-card__badge--warn' : 'support-weather-card__badge--good');
+
+                const min = Number.isFinite(forecast.tempMin) ? `${forecast.tempMin}°` : '—';
+                const max = Number.isFinite(forecast.tempMax) ? `${forecast.tempMax}°` : '—';
+                const rainProb = Number.isFinite(forecast.rainProbMax) ? `${forecast.rainProbMax}%` : '—';
+                const rainMm = Number.isFinite(forecast.rainMm) ? `${forecast.rainMm.toFixed(forecast.rainMm >= 1 ? 1 : 0)} mm` : '—';
+                const rainHours = Number.isFinite(forecast.rainHours) ? `${String(forecast.rainHours).replace('.', ',')} h` : '—';
+
+                return `
+                    <div class="support-weather-card">
+                        <div class="support-weather-card__top">
+                            <div class="support-weather-card__city">${city}</div>
+                            <div class="support-weather-card__icon">${forecast.icon || '🌡️'}</div>
+                        </div>
+                        <div class="support-weather-card__temp">${min} / ${max}</div>
+                        <div class="support-weather-card__metrics">
+                            <div class="support-weather-card__metric"><span>Prob. pluie</span><strong>${rainProb}</strong></div>
+                            <div class="support-weather-card__metric"><span>Cumul pluie</span><strong>${rainMm}</strong></div>
+                            <div class="support-weather-card__metric"><span>Heures humides</span><strong>${rainHours}</strong></div>
+                        </div>
+                        <div class="support-weather-card__badge ${badgeClass}">${escapeHtml(badge.label)} · ${escapeHtml(badge.summary)}</div>
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            console.warn('[SUPPORT] météo prévisionnelle indisponible:', e?.message || e);
+            if (formatDateKey(screenDate) !== formatDateKey(currentDate)) return;
+            renderSupportWeatherState(`Prévisions indisponibles pour ${dateLabel}.`, true);
+        }
+    }
+
     function hasMeaningfulDayData(payload) {
         if (!payload || typeof payload !== 'object') return false;
+
         if (String(payload.__GLOBAL_OBS || '').trim()) return true;
 
         return Object.keys(payload).some((agentName) => {
@@ -165,7 +272,9 @@ window.SupportModule = (function() {
 
     function redrawSupportDatePickerMarkers() {
         if (!supportDatePickerInstance) return;
-        supportDatePickerInstance.calendarContainer?.querySelectorAll('.flatpickr-day')?.forEach(markSupportCalendarDay);
+        supportDatePickerInstance.calendarContainer
+            ?.querySelectorAll('.flatpickr-day')
+            ?.forEach(markSupportCalendarDay);
     }
 
     async function refreshSupportDaysWithData() {
@@ -207,6 +316,7 @@ window.SupportModule = (function() {
 
         supportDaysWithData = nextSet;
         redrawSupportDatePickerMarkers();
+        console.log(`[SUPPORT] calendrier marqué: ${supportDaysWithData.size} jour(s) avec données.`);
     }
 
     async function ensureEditLockForCurrentDay({ silent = true } = {}) {
@@ -254,6 +364,7 @@ window.SupportModule = (function() {
         const elPicker = document.getElementById('supportDatePicker');
         if (!elPicker || supportDatePickerInstance || !window.flatpickr) return;
 
+        // L'input natif est remplacé par Flatpickr pour pouvoir styliser les jours "avec données".
         supportDatePickerInstance = window.flatpickr(elPicker, {
             dateFormat: 'Y-m-d',
             altInput: true,
@@ -438,7 +549,7 @@ window.SupportModule = (function() {
                     }
                     await loadActivitiesFromSupabase();
                     renderParams();
-                    renderTable();
+                    await loadAndRenderTable();
                 }
             });
         }
@@ -499,6 +610,7 @@ window.SupportModule = (function() {
             return;
         }
 
+        // Quand on revient sur Brief, recharger les données du jour pour éviter un affichage vide/stale
         if (tabId === 'tabBrief') {
             loadAndRenderTable();
             return;
@@ -529,6 +641,10 @@ window.SupportModule = (function() {
         if (supportDatePickerInstance) {
             supportDatePickerInstance.setDate(formatDateKey(currentDate), false);
         }
+
+        renderSupportWeatherForecast().catch((e) => {
+            console.warn('[SUPPORT] rendu météo impossible:', e?.message || e);
+        });
     }
 
     function changeDay(delta) {
@@ -656,26 +772,35 @@ window.SupportModule = (function() {
             else if (tech.ptc === 'PTC - PTD') qualif = 'PTC-PTD';
             else if (tech.ptc) qualif = 'PTC';
 
+            const safeTechName = escapeHtml(tech.name);
+            const safeQualif = escapeHtml(qualif);
+            const safeObs = escapeHtml(rowData.obs || '');
+            const activityOptions = activities.map(a => {
+                const label = activityDisplayLabel(a);
+                const safeLabel = escapeHtml(label);
+                return `<option value="${safeLabel}" ${actLabel===label?'selected':''}>${safeLabel}</option>`;
+            }).join('');
+            const missingActivityOption = actLabel && !activities.some(a => activityDisplayLabel(a) === actLabel)
+                ? `<option value="${escapeHtml(actLabel)}" selected>${escapeHtml(actLabel)}</option>`
+                : '';
+
             tr.innerHTML = `
                 <td style="text-align:center; color:#94a3b8; font-size:10px;">${idx + 1}</td>
-                <td class="cell-name">${tech.name}</td>
-                <td class="cell-ptc">${qualif}</td>
-                                
+                <td class="cell-name">${safeTechName}</td>
+                <td class="cell-ptc">${safeQualif}</td>
+                                 
                 <td>
-                    <select class="editable-select input-act" data-tech="${tech.name}" 
+                    <select class="editable-select input-act" data-tech="${safeTechName}" 
                             style="background-color:${bgColor}; color:${fgColor}; border-color:${borderColor};">
                         <option value="">-</option>
-                        ${activities.map(a => {
-                            const label = activityDisplayLabel(a);
-                            return `<option value="${label}" ${actLabel===label?'selected':''}>${label}</option>`;
-                        }).join('')}
-                        ${actLabel && !activities.some(a => activityDisplayLabel(a) === actLabel) ? `<option value="${actLabel}" selected>${actLabel}</option>` : ''}
+                        ${activityOptions}
+                        ${missingActivityOption}
                     </select>
                 </td>
                 
                 <td>
-                    <input class="editable-input input-obs" data-tech="${tech.name}" 
-                           value="${rowData.obs||''}" placeholder="...">
+                    <input class="editable-input input-obs" data-tech="${safeTechName}" 
+                           value="${safeObs}" placeholder="...">
                 </td>
                 
                 <td>${renderSelect('briefA', rowData.briefA, tech.name)}</td>
@@ -710,8 +835,9 @@ window.SupportModule = (function() {
         let cls = '';
         if(val === 'OUI') cls = 'val-oui';
         else if(val === 'NON') cls = 'val-non';
-        
-        return `<select class="editable-select ${cls}" data-tech="${techName}" data-field="${field}">
+
+        const safeTechName = escapeHtml(techName);
+        return `<select class="editable-select ${cls}" data-tech="${safeTechName}" data-field="${field}">
             <option value="">-</option>
             <option value="OUI" ${val==='OUI'?'selected':''}>OUI</option>
             <option value="NON" ${val==='NON'?'selected':''}>NON</option>
@@ -720,7 +846,8 @@ window.SupportModule = (function() {
 
     // Helper pour générer les selects OUI (simple)
     function renderYesNo(field, val, techName) {
-         return `<select class="editable-select" data-tech="${techName}" data-field="${field}" style="font-size:10px; width:50px;">
+         const safeTechName = escapeHtml(techName);
+         return `<select class="editable-select" data-tech="${safeTechName}" data-field="${field}" style="font-size:10px; width:50px;">
             <option value="">-</option>
             <option value="OUI" ${val==='OUI'?'selected':''}>OUI</option>
         </select>`;
@@ -803,13 +930,13 @@ window.SupportModule = (function() {
         
         // FIX v11.1 : Synchronisation Supabase (si connecté)
         if(window.SupportStore && window.supabaseClient) {
-            window.SupportStore.saveSupport(dayData, {
-                jour: key,
-                site: "VLG",
-                expectedUpdatedAt: currentDayUpdatedAt,
-                lockToken: currentDayLockToken,
-            })
+            queueSupportSave(dayData, key)
                 .then((savedRow) => {
+                    if (!savedRow) return;
+                    if (key !== formatDateKey(currentDate)) {
+                        console.log("[SUPPORT] sauvegarde confirmée pour une autre journée, UI courante inchangée.");
+                        return;
+                    }
                     const meta = savedRow?.payload?._meta || dayData?._meta || null;
                     lastSupportMeta = meta;
                     renderLastUpdate(lastSupportMeta);
@@ -847,6 +974,20 @@ window.SupportModule = (function() {
         updateHistoryLog(key, dayData);
     }
 
+    function queueSupportSave(dayData, key) {
+        const payloadSnapshot = JSON.parse(JSON.stringify(dayData || {}));
+        supportSaveQueue = supportSaveQueue
+            .catch(() => null)
+            .then(() => window.SupportStore.saveSupport(payloadSnapshot, {
+                jour: key,
+                site: "VLG",
+                expectedUpdatedAt: currentDayUpdatedAt,
+                lockToken: currentDayLockToken,
+            }));
+
+        return supportSaveQueue;
+    }
+
     function updateHistoryLog(dateKey, data) {
         // On retire les anciennes entrées de ce jour pour éviter les doublons
         history = history.filter(h => h.date !== dateKey);
@@ -872,13 +1013,56 @@ window.SupportModule = (function() {
         localStorage.setItem('demat_history', JSON.stringify(history));
     }
 
-    function clearDay() {
+    async function clearDay() {
         if(confirm("Voulez-vous vraiment vider toutes les saisies de ce jour ?")) {
             const dayKey = formatDateKey(currentDate);
-            localStorage.removeItem('demat_day_' + dayKey);
-            supportDaysWithData.delete(dayKey);
-            redrawSupportDatePickerMarkers();
-            renderTable();
+            const applyLocalClear = () => {
+                localStorage.removeItem('demat_day_' + dayKey);
+                supportDaysWithData.delete(dayKey);
+                redrawSupportDatePickerMarkers();
+                updateHistoryLog(dayKey, {});
+                renderTable();
+            };
+
+            if(window.SupportStore && window.supabaseClient) {
+                try {
+                    const clearedPayload = { __GLOBAL_OBS: "" };
+                    const savedRow = await window.SupportStore.saveSupport(clearedPayload, {
+                        jour: dayKey,
+                        site: "VLG",
+                        expectedUpdatedAt: currentDayUpdatedAt,
+                        lockToken: currentDayLockToken,
+                    });
+                    if (savedRow?.updated_at) currentDayUpdatedAt = savedRow.updated_at;
+                    const lockObj = savedRow?.payload?._lock || null;
+                    if (lockObj?.token) currentDayLockToken = lockObj.token;
+                    renderLockStatus('acquired', lockObj);
+                    applyLocalClear();
+                    if (typeof window.setSupabaseConnectionStatus === "function") {
+                        window.setSupabaseConnectionStatus(true, "Supabase connecté");
+                    }
+                    return;
+                } catch (e) {
+                    const category = String(e?.category || '').toLowerCase();
+                    if (category === 'conflict') {
+                        alert("⚠️ Conflit détecté : la journée a été modifiée ailleurs. Rechargement.");
+                        await loadAndRenderTable();
+                        return;
+                    }
+                    if (category === 'lock') {
+                        alert("⛔ Suppression refusée : un autre utilisateur édite cette journée.");
+                        await ensureEditLockForCurrentDay({ silent: false });
+                        return;
+                    }
+                    if (typeof window.setSupabaseConnectionStatus === "function") {
+                        window.setSupabaseConnectionStatus(false, "Supabase indisponible");
+                    }
+                    alert("⚠️ Suppression cloud échouée. Aucune suppression appliquée.\n" + (e?.message || e));
+                    return;
+                }
+            }
+
+            applyLocalClear();
         }
     }
 
@@ -1065,6 +1249,7 @@ window.SupportModule = (function() {
         const saveAttemptId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         console.log(`[ACTIVITY][${saveAttemptId}] 💾 local save done (${activities.length} activités)`);
 
+        // Mettre à jour l'UI immédiatement pour éviter les actions sur index obsolètes
         renderParams();
         renderTable();
 
@@ -1094,6 +1279,9 @@ window.SupportModule = (function() {
     async function saveActivitiesToSupabase({ saveAttemptId = 'n/a' } = {}) {
         if (!window.SupportStore || !window.supabaseClient) {
             console.warn(`[ACTIVITY][${saveAttemptId}] ⚠️ Supabase non disponible -> local only`);
+            if (typeof window.setSupabaseConnectionStatus === "function") {
+                window.setSupabaseConnectionStatus(false, "Supabase indisponible");
+            }
             return { status: 'local', category: 'auth', toastMessage: "Sauvegarde locale OK. Supabase indisponible." };
         }
 
@@ -1106,12 +1294,18 @@ window.SupportModule = (function() {
 
             const durationMs = Math.round(performance.now() - start);
             console.log(`[ACTIVITY][${saveAttemptId}] ✅ Supabase confirmed write in ${durationMs}ms`, result);
+            if (typeof window.setSupabaseConnectionStatus === "function") {
+                window.setSupabaseConnectionStatus(true, "Supabase connecté");
+            }
             return { status: 'ok', category: null, result };
         } catch (e) {
             const durationMs = Math.round(performance.now() - start);
             const category = String(e?.category || e?.original?.category || '').toLowerCase();
             const normalizedCategory = ['auth', 'network', 'rls', 'sql'].includes(category) ? category : 'unknown';
             console.warn(`[ACTIVITY][${saveAttemptId}] ❌ Supabase save failed category=${normalizedCategory} in ${durationMs}ms`, e);
+            if (typeof window.setSupabaseConnectionStatus === "function") {
+                window.setSupabaseConnectionStatus(false, "Supabase indisponible");
+            }
             return {
                 status: 'error',
                 category: normalizedCategory,
@@ -1174,11 +1368,14 @@ window.SupportModule = (function() {
                 console.warn("⚠️ V3.3 Chargement support_settings échoué (fallback local/historique):", e.message);
             }
         }
-
+        
+        // Si les paramètres cloud existent, ils priment.
+        // On ne fusionne PAS avec l'historique pour éviter de ressusciter des activités supprimées.
         let merged;
         if (fromSettings.length > 0) {
             merged = mergeActivities(fromSettings);
         } else if (settingsLoaded) {
+            // support_settings lu mais vide: bootstrap initial
             try {
                 const { data: rows, error } = await window.supabaseClient
                     .from("support_journee")
@@ -1198,6 +1395,7 @@ window.SupportModule = (function() {
                 ...fromHistory,
             ]);
         } else {
+            // Impossible de lire support_settings (offline/auth): garder local pour ne pas écraser.
             merged = mergeActivities(localActs.length > 0 ? localActs : DEFAULT_ACTIVITIES);
         }
 
@@ -1345,14 +1543,19 @@ window.SupportModule = (function() {
             return valA.localeCompare(valB) * sortDir;
         });
 
+        const renderSafeText = (value, fallback = '') => {
+            const normalized = String(value || '').trim();
+            return normalized ? escapeHtml(normalized) : fallback;
+        };
+
         tbody.innerHTML = data.map(h => `
             <tr>
-                <td>${h.date}</td>
-                <td style="font-weight:bold;">${h.agent}</td>
-                <td><span style="padding:2px 6px; border-radius:4px; background:#f1f5f9; font-size:11px;">${h.act||'-'}</span></td>
-                <td style="color:var(--muted); font-style:italic; font-size:11px;">${h.obs||''}</td>
-                <td style="text-align:center;">${h.brief}</td>
-                <td style="text-align:center;">${h.debrief}</td>
+                <td>${renderSafeText(h.date, '-')}</td>
+                <td style="font-weight:bold;">${renderSafeText(h.agent, '-')}</td>
+                <td><span style="padding:2px 6px; border-radius:4px; background:#f1f5f9; font-size:11px;">${renderSafeText(h.act, '-')}</span></td>
+                <td style="color:var(--muted); font-style:italic; font-size:11px;">${renderSafeText(h.obs, '')}</td>
+                <td style="text-align:center;">${renderSafeText(h.brief, '')}</td>
+                <td style="text-align:center;">${renderSafeText(h.debrief, '')}</td>
             </tr>
         `).join('');
         

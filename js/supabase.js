@@ -16,12 +16,22 @@ const SUPABASE_ANON_KEY = "sb_publishable_Z5fcSQtKwqktx_dbsO9nPQ_03HMnden";
 // ⚠️ ATTENTION : vérifier que cette clé est bien la clé "anon/public" JWT (commence par eyJ...)
 // dans Dashboard Supabase → Settings → API → Project API keys
 
+// En v2 CDN, il faut passer par window.supabase
 window.supabaseClient = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY
 );
 
 console.log("✅ Supabase client initialisé");
+
+function setSupabaseConnectionStatus(isConnected, title = "") {
+  const dot = document.getElementById("supabaseStatusDot");
+  if (!dot) return;
+  const connected = !!isConnected;
+  dot.style.background = connected ? "#22c55e" : "#ef4444";
+  dot.title = title || (connected ? "Supabase connecté" : "Supabase déconnecté");
+}
+window.setSupabaseConnectionStatus = setSupabaseConnectionStatus;
 
 function classifySupabaseError(error) {
   const message = String(error?.message || "").toLowerCase();
@@ -57,7 +67,9 @@ async function getAuthContextRobust() {
   try {
     const { data, error } = await client.auth.getUser();
     if (error) throw error;
-    if (data?.user) return { user: data.user, source: "getUser" };
+    if (data?.user) {
+      return { user: data.user, source: "getUser" };
+    }
   } catch (e) {
     console.warn("[SUPABASE][AUTH] getUser échoué, tentative fallback getSession:", e?.message || e);
   }
@@ -65,7 +77,9 @@ async function getAuthContextRobust() {
   try {
     const { data, error } = await client.auth.getSession();
     if (error) throw error;
-    if (data?.session?.user) return { user: data.session.user, source: "getSession" };
+    if (data?.session?.user) {
+      return { user: data.session.user, source: "getSession" };
+    }
   } catch (e) {
     console.warn("[SUPABASE][AUTH] getSession échoué:", e?.message || e);
   }
@@ -73,16 +87,19 @@ async function getAuthContextRobust() {
   return { user: null, source: "none" };
 }
 
+// -------------------------
+// Modal de connexion (autocomplete Chrome/Edge)
+// -------------------------
 function openLoginModal(supabaseClient) {
-  const modal = document.getElementById("loginModal");
-  const form = document.getElementById("loginForm");
-  const errEl = document.getElementById("loginError");
+  const modal     = document.getElementById("loginModal");
+  const form      = document.getElementById("loginForm");
+  const errEl     = document.getElementById("loginError");
   const submitBtn = document.getElementById("loginSubmit");
   const cancelBtn = document.getElementById("loginCancel");
   if (!modal || !form) return;
 
   errEl.style.display = "none";
-  errEl.textContent = "";
+  errEl.textContent   = "";
   modal.style.display = "flex";
   setTimeout(() => document.getElementById("loginEmail")?.focus(), 80);
 
@@ -96,26 +113,27 @@ function openLoginModal(supabaseClient) {
 
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const email = document.getElementById("loginEmail").value.trim();
+    const email    = document.getElementById("loginEmail").value.trim();
     const password = document.getElementById("loginPassword").value;
 
-    submitBtn.disabled = true;
+    submitBtn.disabled    = true;
     submitBtn.textContent = "Connexion…";
-    errEl.style.display = "none";
+    errEl.style.display   = "none";
 
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
 
-    submitBtn.disabled = false;
+    submitBtn.disabled    = false;
     submitBtn.textContent = "Se connecter";
 
     if (error) {
-      errEl.textContent = "❌ " + error.message;
+      errEl.textContent   = "❌ " + error.message;
       errEl.style.display = "block";
       return;
     }
 
     closeModal();
 
+    // ── Vérifier si l'utilisateur doit changer son mot de passe ──
     const meta = data?.user?.user_metadata || {};
     if (meta.must_change_password === true) {
       console.warn("🔑 Première connexion — forçage changement de mot de passe.");
@@ -124,92 +142,105 @@ function openLoginModal(supabaseClient) {
   };
 }
 
+// -------------------------
+// Modal changement de mot de passe (première connexion)
+// -------------------------
 function openChangePasswordModal(supabaseClient) {
-  const modal = document.getElementById("changePasswordModal");
-  const form = document.getElementById("changePasswordForm");
-  const errEl = document.getElementById("changePasswordError");
+  const modal     = document.getElementById("changePasswordModal");
+  const form      = document.getElementById("changePasswordForm");
+  const errEl     = document.getElementById("changePasswordError");
   const submitBtn = document.getElementById("changePasswordSubmit");
-  const newPwEl = document.getElementById("newPassword");
-  const confPwEl = document.getElementById("confirmPassword");
-  const fillEl = document.getElementById("pwStrengthFill");
-  const labelEl = document.getElementById("pwStrengthLabel");
+  const newPwEl   = document.getElementById("newPassword");
+  const confPwEl  = document.getElementById("confirmPassword");
+  const fillEl    = document.getElementById("pwStrengthFill");
+  const labelEl   = document.getElementById("pwStrengthLabel");
   if (!modal || !form) return;
 
   modal.style.display = "flex";
   setTimeout(() => newPwEl?.focus(), 80);
 
+  // Indicateur de force du mot de passe
   function passwordStrength(pw) {
     let score = 0;
-    if (pw.length >= 8) score++;
-    if (pw.length >= 12) score++;
-    if (/[A-Z]/.test(pw)) score++;
-    if (/[0-9]/.test(pw)) score++;
+    if (pw.length >= 8)           score++;
+    if (pw.length >= 12)          score++;
+    if (/[A-Z]/.test(pw))        score++;
+    if (/[0-9]/.test(pw))        score++;
     if (/[^A-Za-z0-9]/.test(pw)) score++;
-    return score;
+    return score; // 0-5
   }
 
   newPwEl.addEventListener("input", () => {
-    const pw = newPwEl.value;
+    const pw    = newPwEl.value;
     const score = passwordStrength(pw);
-    const colors = ["#ef4444", "#f97316", "#eab308", "#3b82f6", "#10b981"];
-    const labels = ["Très faible", "Faible", "Moyen", "Bon", "Excellent"];
-    fillEl.style.width = Math.min(100, score * 20) + "%";
+    const colors = ["#ef4444","#f97316","#eab308","#3b82f6","#10b981"];
+    const labels = ["Très faible","Faible","Moyen","Bon","Excellent"];
+    fillEl.style.width      = Math.min(100, score * 20) + "%";
     fillEl.style.background = colors[Math.max(0, score - 1)] || "#e5e7eb";
-    labelEl.textContent = pw.length ? labels[Math.max(0, score - 1)] : "";
-    labelEl.style.color = colors[Math.max(0, score - 1)] || "#9ca3af";
+    labelEl.textContent     = pw.length ? labels[Math.max(0, score - 1)] : "";
+    labelEl.style.color     = colors[Math.max(0, score - 1)] || "#9ca3af";
   });
 
+  // Non fermable — l'utilisateur DOIT changer son mot de passe
   modal.onclick = (e) => e.stopPropagation();
 
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const newPw = newPwEl.value;
+    const newPw  = newPwEl.value;
     const confPw = confPwEl.value;
     errEl.style.display = "none";
 
     if (newPw !== confPw) {
-      errEl.textContent = "❌ Les mots de passe ne correspondent pas.";
+      errEl.textContent   = "❌ Les mots de passe ne correspondent pas.";
       errEl.style.display = "block";
       return;
     }
     if (newPw.length < 8) {
-      errEl.textContent = "❌ Le mot de passe doit contenir au moins 8 caractères.";
+      errEl.textContent   = "❌ Le mot de passe doit contenir au moins 8 caractères.";
       errEl.style.display = "block";
       return;
     }
 
-    submitBtn.disabled = true;
+    submitBtn.disabled    = true;
     submitBtn.textContent = "Enregistrement…";
 
+    // 1) Changer le mot de passe
     const { error: pwError } = await supabaseClient.auth.updateUser({ password: newPw });
     if (pwError) {
-      errEl.textContent = "❌ " + pwError.message;
+      errEl.textContent   = "❌ " + pwError.message;
       errEl.style.display = "block";
-      submitBtn.disabled = false;
+      submitBtn.disabled    = false;
       submitBtn.textContent = "✅ Enregistrer mon mot de passe";
       return;
     }
 
+    // 2) Retirer le flag must_change_password
     await supabaseClient.auth.updateUser({ data: { must_change_password: false } });
 
+    // 3) Fermer et afficher toast
     modal.style.display = "none";
     form.reset();
 
     const toast = document.createElement("div");
     toast.textContent = "✅ Mot de passe mis à jour avec succès !";
     Object.assign(toast.style, {
-      position: "fixed", bottom: "24px", right: "24px", zIndex: "99999",
-      background: "#10b981", color: "#fff", padding: "12px 20px",
-      borderRadius: "8px", fontWeight: "700", fontSize: ".9rem",
-      boxShadow: "0 4px 16px rgba(0,0,0,.2)"
+      position:"fixed", bottom:"24px", right:"24px", zIndex:"99999",
+      background:"#10b981", color:"#fff", padding:"12px 20px",
+      borderRadius:"8px", fontWeight:"700", fontSize:".9rem",
+      boxShadow:"0 4px 16px rgba(0,0,0,.2)"
     });
     document.body.appendChild(toast);
-    setTimeout(() => { toast.style.opacity = "0"; setTimeout(() => toast.remove(), 400); }, 3500);
+    setTimeout(() => { toast.style.opacity="0"; setTimeout(() => toast.remove(), 400); }, 3500);
+
+    console.log("✅ Mot de passe changé et flag must_change_password retiré.");
   };
 }
 
+// -------------------------
+// Auth UI
+// -------------------------
 (function setupAuthUI() {
-  const btn = document.getElementById("btnAuth");
+  const btn    = document.getElementById("btnAuth");
   const status = document.getElementById("authStatus");
   const supportBtn = document.getElementById("btnSupportView");
   const client = window.supabaseClient;
@@ -224,19 +255,24 @@ function openChangePasswordModal(supabaseClient) {
 
     if (user?.email) {
       status.textContent = `Connecté : ${user.email}`;
-      btn.textContent = "Se déconnecter";
-      btn.dataset.state = "out";
+      btn.textContent    = "Se déconnecter";
+      btn.dataset.state  = "out";
+      setSupabaseConnectionStatus(true, "Supabase connecté");
     } else {
       status.textContent = "Non connecté";
-      btn.textContent = "Se connecter";
-      btn.dataset.state = "in";
+      btn.textContent    = "Se connecter";
+      btn.dataset.state  = "in";
+      setSupabaseConnectionStatus(false, "Supabase déconnecté");
     }
 
+    // Verrouille l'accès Support Journée tant que l'utilisateur n'est pas connecté.
     window.__SUPPORT_AUTH_CONNECTED = connected;
     if (supportBtn) {
       supportBtn.disabled = !connected;
       supportBtn.classList.toggle("btn--disabled", !connected);
-      supportBtn.title = connected ? "Ouvrir Support Journée" : "Connectez-vous pour accéder au Support Journée";
+      supportBtn.title = connected
+        ? "Ouvrir Support Journée"
+        : "Connectez-vous pour accéder au Support Journée";
     }
 
     window.dispatchEvent(new CustomEvent("demat:auth-changed", {
@@ -251,18 +287,25 @@ function openChangePasswordModal(supabaseClient) {
     }
   }
 
+  // État initial — vérifier aussi le flag si session déjà active
   client.auth.getUser().then(({ data }) => {
     setUI(data?.user);
     const meta = data?.user?.user_metadata || {};
     if (meta.must_change_password === true) {
+      console.warn("🔑 Session active avec must_change_password — forçage.");
       openChangePasswordModal(client);
     }
-  }).catch(() => setUI(null));
+  }).catch(() => {
+    setUI(null);
+    setSupabaseConnectionStatus(false, "Supabase déconnecté");
+  });
 
+  // Changements de session
   client.auth.onAuthStateChange((_event, session) => {
     setUI(session?.user || null);
   });
 
+  // Bouton connexion / déconnexion
   btn.addEventListener("click", async () => {
     if (btn.dataset.state === "out") {
       await client.auth.signOut();
@@ -270,13 +313,19 @@ function openChangePasswordModal(supabaseClient) {
     }
     openLoginModal(client);
   });
+
 })();
 
+// -------------------------
+// Support Journée (VLG) — TEST DB
+// -------------------------
 (function setupSupportStore() {
   const SITE = "VLG";
   const DEFAULT_LOCK_TTL_SECONDS = 10 * 60;
 
   function todayISO() {
+    // FIX v1.1 : utilise l'heure locale pour éviter décalage UTC en fin de journée
+    // fr-CA retourne le format YYYY-MM-DD nativement
     return new Date().toLocaleDateString("fr-CA");
   }
 
@@ -288,6 +337,7 @@ function openChangePasswordModal(supabaseClient) {
   }
 
   async function loadSupport({ jour = todayISO(), site = SITE } = {}) {
+    // 1) Tenter de lire
     const { data, error } = await window.supabaseClient
       .from("support_journee")
       .select("id, jour, site, payload, locked, updated_at, updated_by")
@@ -297,29 +347,14 @@ function openChangePasswordModal(supabaseClient) {
 
     if (error) throw error;
 
+    // 2) Si pas trouvé -> ne rien créer ici (lecture pure).
+    // La création éventuelle est gérée au premier save.
     if (!data) {
-      const user = await requireUser();
-      const emptyPayload = { _meta: { createdAt: new Date().toISOString(), createdBy: user.email } };
-
-      const { data: created, error: err2 } = await window.supabaseClient
-        .from("support_journee")
-        .upsert(
-          {
-            jour,
-            site,
-            payload: emptyPayload,
-            updated_at: new Date().toISOString(),
-            updated_by: user.id,
-          },
-          { onConflict: "jour,site" }
-        )
-        .select("id, jour, site, payload, locked, updated_at, updated_by")
-        .single();
-
-      if (err2) throw err2;
-      return created;
+      console.log("📭 Aucun support trouvé en base pour", jour, site);
+      return null;
     }
 
+    console.log("📥 Support chargé depuis la base :", data);
     return data;
   }
 
@@ -347,7 +382,9 @@ function openChangePasswordModal(supabaseClient) {
     return Object.assign(new Error(message), { category: "lock", details });
   }
 
-  async function acquireDayLock({ jour = todayISO(), site = SITE, ttlSeconds = DEFAULT_LOCK_TTL_SECONDS, token = null } = {}) {
+  async function acquireDayLock(
+    { jour = todayISO(), site = SITE, ttlSeconds = DEFAULT_LOCK_TTL_SECONDS, token = null } = {}
+  ) {
     const user = await requireUser();
     const now = new Date();
     const nowIso = now.toISOString();
@@ -361,13 +398,19 @@ function openChangePasswordModal(supabaseClient) {
       .maybeSingle();
 
     if (readErr) throw readErr;
-    if (current?.locked) return { status: "locked", updatedAt: current?.updated_at || null, lock: null };
+    if (current?.locked) {
+      return { status: "locked", updatedAt: current?.updated_at || null, lock: null };
+    }
 
     const currentPayload = (current?.payload && typeof current.payload === "object") ? current.payload : {};
     const currentLock = (currentPayload._lock && typeof currentPayload._lock === "object") ? currentPayload._lock : null;
 
     if (isLockActive(currentLock) && currentLock.ownerId && currentLock.ownerId !== user.id) {
-      return { status: "busy", updatedAt: current?.updated_at || null, lock: currentLock };
+      return {
+        status: "busy",
+        updatedAt: current?.updated_at || null,
+        lock: currentLock,
+      };
     }
 
     const lockToken = token || currentLock?.token || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -380,7 +423,10 @@ function openChangePasswordModal(supabaseClient) {
       expiresAt: expiresAtIso,
     };
 
-    const nextPayload = { ...currentPayload, _lock: nextLock };
+    const nextPayload = {
+      ...currentPayload,
+      _lock: nextLock,
+    };
 
     const { data: written, error: writeErr } = await window.supabaseClient
       .from("support_journee")
@@ -408,11 +454,18 @@ function openChangePasswordModal(supabaseClient) {
 
   async function saveSupport(
     payload,
-    { jour = todayISO(), site = SITE, expectedUpdatedAt = null, lockToken = null, lockTtlSeconds = DEFAULT_LOCK_TTL_SECONDS } = {}
+    {
+      jour = todayISO(),
+      site = SITE,
+      expectedUpdatedAt = null,
+      lockToken = null,
+      lockTtlSeconds = DEFAULT_LOCK_TTL_SECONDS,
+    } = {}
   ) {
     const user = await requireUser();
     const nowIso = new Date().toISOString();
 
+    // FIX v1.1 : vérifier le verrou avant d'écrire
     const { data: current, error: errCheck } = await window.supabaseClient
       .from("support_journee")
       .select("locked, updated_at, payload")
@@ -421,23 +474,34 @@ function openChangePasswordModal(supabaseClient) {
       .maybeSingle();
 
     if (errCheck) throw errCheck;
-    if (current?.locked) throw new Error(`⛔ La fiche du ${jour} est verrouillée. Sauvegarde annulée.`);
+
+    if (current?.locked) {
+      const msg = `⛔ La fiche du ${jour} est verrouillée. Sauvegarde annulée.`;
+      console.warn(msg);
+      throw new Error(msg);
+    }
 
     const currentPayload = (current?.payload && typeof current.payload === "object") ? current.payload : {};
     const currentLock = (currentPayload._lock && typeof currentPayload._lock === "object") ? currentPayload._lock : null;
     if (isLockActive(currentLock) && currentLock.ownerId && currentLock.ownerId !== user.id) {
-      throw makeLockError(`⛔ Édition en cours par ${lockOwnerLabel(currentLock)} (jusqu'à ${currentLock.expiresAt || "n/a"}).`, { lock: currentLock, jour, site });
-    }
-    if (isLockActive(currentLock) && currentLock.ownerId === user.id && lockToken && currentLock.token && currentLock.token !== lockToken) {
-      throw makeLockError("⛔ Votre verrou d'édition n'est plus valide. Rechargez la fiche.", { lock: currentLock, jour, site });
-    }
-    if (expectedUpdatedAt && current?.updated_at && expectedUpdatedAt !== current.updated_at) {
-      throw makeConflictError("⚠️ Conflit de sauvegarde: la fiche a été modifiée par un autre utilisateur. Rechargez avant de réessayer.", {
-        expectedUpdatedAt, currentUpdatedAt: current.updated_at, jour, site, lock: currentLock
-      });
+      const msg = `⛔ Édition en cours par ${lockOwnerLabel(currentLock)} (jusqu'à ${currentLock.expiresAt || "n/a"}).`;
+      throw makeLockError(msg, { lock: currentLock, jour, site });
     }
 
-    const existingMeta = (payload && typeof payload === "object" && payload._meta && typeof payload._meta === "object") ? payload._meta : {};
+    if (isLockActive(currentLock) && currentLock.ownerId === user.id && lockToken && currentLock.token && currentLock.token !== lockToken) {
+      const msg = "⛔ Votre verrou d'édition n'est plus valide. Rechargez la fiche.";
+      throw makeLockError(msg, { lock: currentLock, jour, site });
+    }
+
+    if (expectedUpdatedAt && current?.updated_at && expectedUpdatedAt !== current.updated_at) {
+      const msg = "⚠️ Conflit de sauvegarde: la fiche a été modifiée par un autre utilisateur. Rechargez avant de réessayer.";
+      throw makeConflictError(msg, { expectedUpdatedAt, currentUpdatedAt: current.updated_at, jour, site, lock: currentLock });
+    }
+
+    const existingMeta = (payload && typeof payload === "object" && payload._meta && typeof payload._meta === "object")
+      ? payload._meta
+      : {};
+
     const nextLock = {
       ownerId: user.id,
       ownerEmail: user.email || "",
@@ -474,12 +538,17 @@ function openChangePasswordModal(supabaseClient) {
       .single();
 
     if (error) throw error;
+
+    console.log("💾 Support sauvegardé en base :", data);
     return data;
   }
 
+  // Rattrapage legacy:
+  // complète payload._meta.lastModifiedByEmail pour les lignes modifiées par l'utilisateur connecté.
   async function backfillLegacyMeta({ site = SITE, limit = 365 } = {}) {
     const user = await requireUser();
     const maxRows = Math.max(1, Math.min(Number(limit) || 365, 1500));
+
     const { data: rows, error } = await window.supabaseClient
       .from("support_journee")
       .select("jour, site, payload, updated_at, updated_by, locked")
@@ -525,21 +594,34 @@ function openChangePasswordModal(supabaseClient) {
           { onConflict: "jour,site" }
         );
 
-      if (!patchErr) patched += 1;
+      if (patchErr) {
+        console.warn("[SUPABASE] backfillLegacyMeta: patch ignored for jour", row.jour, patchErr.message);
+        continue;
+      }
+      patched += 1;
     }
 
+    console.log(`[SUPABASE] backfillLegacyMeta done site=${site} scanned=${scanned} patched=${patched}`);
     return { scanned, patched };
   }
 
+  // V3.1 — Settings partagés (table support_settings)
   async function loadSetting(settingKey, { site = SITE } = {}) {
     if (!settingKey) throw new Error("settingKey requis");
+
     const { data, error } = await window.supabaseClient
       .from("support_settings")
       .select("payload")
       .eq("site", site)
       .eq("setting_key", settingKey)
       .maybeSingle();
-    if (error) throw error;
+
+    if (error) {
+      console.warn(`[SUPABASE] ⚠️ loadSetting(${settingKey}) échoué:`, error.message);
+      throw error;
+    }
+
+    console.log(`[SUPABASE] 📥 setting chargé: ${settingKey} (${site})`);
     return data?.payload ?? null;
   }
 
@@ -549,8 +631,11 @@ function openChangePasswordModal(supabaseClient) {
     const saveId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const authContext = await getAuthContextRobust();
     const updatedBy = authContext.user?.id || null;
-    const startedAt = performance.now();
+    const payloadKeys = (payload && typeof payload === "object") ? Object.keys(payload).length : 0;
 
+    console.log(`[SUPABASE][${saveId}] ⏳ saveSetting start key=${settingKey} site=${site} updatedBy=${updatedBy ? "yes" : "no"} authSource=${authContext.source} payloadKeys=${payloadKeys}`);
+
+    const startedAt = performance.now();
     const { data, error } = await window.supabaseClient
       .from("support_settings")
       .upsert(
@@ -570,23 +655,26 @@ function openChangePasswordModal(supabaseClient) {
 
     if (error) {
       const category = classifySupabaseError(error);
+      console.warn(`[SUPABASE][${saveId}] ❌ saveSetting failed category=${category} durationMs=${durationMs}:`, error);
       throw Object.assign(new Error(error.message || "saveSetting échoué"), {
         original: error,
         category,
         saveId,
-        durationMs,
         operation: "support_settings.upsert",
       });
     }
 
+    console.log(`[SUPABASE][${saveId}] ✅ saveSetting success key=${settingKey} site=${site} durationMs=${durationMs}`, data);
     return data;
   }
 
+  // Expose des helpers pour test console
   window.SupportStore = {
     SITE,
     todayISO,
     loadToday: () => loadSupport({ jour: todayISO(), site: SITE }),
     saveToday: (payload) => saveSupport(payload, { jour: todayISO(), site: SITE }),
+    // FIX v1.2 : méthodes génériques pour navigation multi-jour (support.js)
     loadSupport: ({ jour = todayISO(), site = SITE } = {}) => loadSupport({ jour, site }),
     saveSupport: (
       payload,
@@ -595,8 +683,21 @@ function openChangePasswordModal(supabaseClient) {
     acquireDayLock: ({ jour = todayISO(), site = SITE, ttlSeconds = DEFAULT_LOCK_TTL_SECONDS, token = null } = {}) =>
       acquireDayLock({ jour, site, ttlSeconds, token }),
     backfillLegacyMeta: ({ site = SITE, limit = 365 } = {}) => backfillLegacyMeta({ site, limit }),
+    // V3.1 : paramètres partagés (support_settings)
     loadSetting: (settingKey, { site = SITE } = {}) => loadSetting(settingKey, { site }),
     saveSetting: (settingKey, payload, { site = SITE } = {}) => saveSetting(settingKey, payload, { site }),
-    saveTest: () => saveSupport({ test: true, message: "Hello Supabase ✅", at: new Date().toISOString() }, { jour: todayISO(), site: SITE }),
+
+    // Petit test prêt à l'emploi
+    saveTest: () =>
+      saveSupport(
+        {
+          test: true,
+          message: "Hello Supabase ✅",
+          at: new Date().toISOString(),
+        },
+        { jour: todayISO(), site: SITE }
+      ),
   };
+
+  console.log("✅ SupportStore prêt (console: SupportStore.loadToday(), SupportStore.saveTest())");
 })();

@@ -3,7 +3,7 @@
    Mis à jour : Intégration FOR-113 et nouveaux types de pièces jointes
 */
 
-const APP_VERSION = "V11.6";
+const APP_VERSION = "V12.0";
 
 /**
  * Configuration des types de documents détectables.

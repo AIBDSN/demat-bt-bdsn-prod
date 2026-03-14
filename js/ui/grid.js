@@ -1,18 +1,58 @@
-/* js/ui/grid.js — DEMAT-BT v11.6 — 09/03/2026
+/* js/ui/grid.js — DEMAT-BT v12.0 — 09/03/2026
    Vue Référent : grandes vignettes, petites vignettes, liste
 */
 
 function renderGrid(filtered, grid) {
   grid.innerHTML = "";
   const mode = state?.referentDisplayMode || "large";
-  grid.classList.remove("grid--large", "grid--small", "grid--list", "grid--grouped-small", "grid--grouped-large");
+  grid.classList.remove("grid--large", "grid--small", "grid--list", "grid--grouped-small", "grid--grouped-large", "grid--empty");
   const rootModeClass = mode === "list"
     ? "grid--list"
     : (mode === "small" ? "grid--grouped-small" : "grid--grouped-large");
   grid.classList.add(rootModeClass);
 
   if (filtered.length === 0) {
-    grid.innerHTML = `<div class="hint" style="padding:16px;">Aucun BT à afficher avec ces filtres.</div>`;
+    grid.classList.remove("grid--list", "grid--grouped-small", "grid--grouped-large");
+    grid.classList.add("grid--empty");
+    grid.innerHTML = `
+      <section class="empty-state">
+        <div class="empty-state__visual">
+          <div class="empty-state__logo-wrap">
+            <img class="empty-state__logo" src="./assets/logo-home.png" alt="Logo DEMAT-BT" />
+          </div>
+        </div>
+        <div class="empty-state__content">
+          <div class="empty-state__eyebrow">Bienvenue</div>
+          <h3 class="empty-state__title">Dématérialisez les BT, facilitez les briefings et pilotez la journée terrain.</h3>
+          <p class="empty-state__text">
+            Importez le PDF du jour pour alimenter automatiquement la vue Référent et le Brief équipe.
+            Vous pouvez aussi utiliser directement le Support Journée, même sans import PDF, pour préparer et suivre l'activité du jour.
+          </p>
+          <div class="empty-state__steps">
+            <div class="empty-state__step">
+              <div class="empty-state__step-num">1</div>
+              <div class="empty-state__step-title">Importer le PDF</div>
+              <div class="empty-state__step-text">Ajoutez la journée reçue pour lancer le traitement.</div>
+            </div>
+            <div class="empty-state__step">
+              <div class="empty-state__step-num">2</div>
+              <div class="empty-state__step-title">Extraire les BT</div>
+              <div class="empty-state__step-text">L'application détecte les interventions et leurs documents associés.</div>
+            </div>
+            <div class="empty-state__step">
+              <div class="empty-state__step-num">3</div>
+              <div class="empty-state__step-title">Brief ou Support Journée</div>
+              <div class="empty-state__step-text">Travaillez ensuite sur le Brief équipe ou ouvrez directement le Support Journée selon le besoin.</div>
+            </div>
+          </div>
+          <div class="empty-state__features">
+            <span class="empty-state__feature">📋 Référent d'équipe</span>
+            <span class="empty-state__feature">🧭 Brief équipe</span>
+            <span class="empty-state__feature">🌦️ Support Journée</span>
+          </div>
+        </div>
+      </section>
+    `;
     return;
   }
 
@@ -119,7 +159,16 @@ function renderGrid(filtered, grid) {
       const firstPage = bt.docs?.[0]?.page || bt.pageStart || 1;
 
       const timeCell = document.createElement("td");
-      timeCell.innerHTML = `<div class="list-time">${timeText}</div>${duration ? `<div class="list-sub">⏱️ ${duration}</div>` : ""}`;
+      const timeMain = document.createElement("div");
+      timeMain.className = "list-time";
+      timeMain.textContent = timeText;
+      timeCell.appendChild(timeMain);
+      if (duration) {
+        const timeSub = document.createElement("div");
+        timeSub.className = "list-sub";
+        timeSub.textContent = `⏱️ ${duration}`;
+        timeCell.appendChild(timeSub);
+      }
       timeCell.appendChild(createCategoryBadge(bt, "sm"));
 
       const techCell = document.createElement("td");
@@ -130,13 +179,18 @@ function renderGrid(filtered, grid) {
       objetCell.textContent = bt.objet || "—";
 
       const clientCell = document.createElement("td");
-      clientCell.innerHTML = `
-        <div>${bt.client || "—"}</div>
-        <div class="list-sub">📍 ${bt.localisation || "—"}</div>
-      `;
+      const clientMain = document.createElement("div");
+      clientMain.textContent = bt.client || "—";
+      const clientSub = document.createElement("div");
+      clientSub.className = "list-sub";
+      clientSub.textContent = `📍 ${bt.localisation || "—"}`;
+      clientCell.append(clientMain, clientSub);
 
       const docsCell = document.createElement("td");
-      docsCell.innerHTML = `<span class="list-docs">${docsCount}</span>`;
+      const docsSpan = document.createElement("span");
+      docsSpan.className = "list-docs";
+      docsSpan.textContent = String(docsCount);
+      docsCell.appendChild(docsSpan);
 
       const actionCell = document.createElement("td");
       const openBtn = document.createElement("button");

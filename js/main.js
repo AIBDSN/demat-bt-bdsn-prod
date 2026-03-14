@@ -1,10 +1,10 @@
-// js/main.js — DEMAT-BT v11.6 — 19/02/2026
+// js/main.js — DEMAT-BT v12.0 — 19/02/2026
 // Point d'entrée principal
 // FIX v11.2.0: renderAll alias, weather init, refreshAllViews
 // FIX v11.4.0: Modal event listeners + loadBadgeRules() + loadBadgeRules avant cache
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("🚀 DEMAT-BT v11.6 démarré.");
+    console.log("🚀 DEMAT-BT v12.0 démarré.");
 
     // ============================================================
     // HELPERS UI attendus par pdf-extractor.js
@@ -183,7 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (gridEl && timelineEl) {
                 if (layout === 'grid') {
-                    gridEl.style.display = 'grid';
+                    gridEl.style.display = '';
                     timelineEl.style.display = 'none';
                 } else {
                     gridEl.style.display = 'none';
@@ -279,9 +279,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // Vider le Cache
     const btnClearCache = document.getElementById('btnClearCache');
     if (btnClearCache) {
-        btnClearCache.addEventListener('click', () => {
+        btnClearCache.addEventListener('click', async () => {
             if (confirm("Attention : Cela effacera toutes les données importées (PDF, Zones). Continuer ?")) {
-                localStorage.clear();
+                const keysToRemove = [];
+                for (let i = 0; i < localStorage.length; i += 1) {
+                    const key = localStorage.key(i) || "";
+                    if (key.startsWith("demat_") || key.startsWith("dematbt_")) {
+                        keysToRemove.push(key);
+                    }
+                }
+                keysToRemove.forEach((k) => localStorage.removeItem(k));
+                if (typeof clearCache === "function") {
+                    await clearCache();
+                }
                 location.reload();
             }
         });
